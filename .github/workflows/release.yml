@@ -1,0 +1,69 @@
+name: Release ARMRA Space
+
+# Push a version tag (e.g. `git tag v0.2.0 && git push origin v0.2.0`) to build,
+# sign, and publish a macOS release. The auto-updater in the shipped app reads
+# the latest.json this workflow uploads and updates users in place.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: macos-14 # Apple Silicon runner → aarch64 build
+    permissions:
+      contents: write # needed to create the GitHub Release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      # The shipped app version AND the latest.json manifest version both come
+      # from tauri.conf.json. Stamp it from the git tag (v1.2.3 → 1.2.3) so each
+      # release's manifest version is greater than installed apps — otherwise the
+      # updater's check() never offers an update.
+      - name: Stamp version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > /tmp/c.json && mv /tmp/c.json src-tauri/tauri.conf.json
+          node -e "const fs=require('fs');const p='package.json';const c=JSON.parse(fs.readFileSync(p));c.version='$VERSION';fs.writeFileSync(p,JSON.stringify(c,null,2)+'\n')"
+          echo "Building ARMRA Space $VERSION"
+          test "$(jq -r .version src-tauri/tauri.conf.json)" = "$VERSION" || { echo "version stamp failed"; exit 1; }
+
+      - name: Build, sign, and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Generated with `tauri signer generate`. Store BOTH as repo secrets.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "ARMRA Space ${{ github.ref_name }}"
+          releaseBody: |
+            Automatic update for ARMRA Space.
+
+            First-time manual install: the app isn't notarized by Apple yet, so
+            macOS Gatekeeper will warn on first launch — right-click the app and
+            choose **Open** once. In-app auto-updates don't re-trigger this.
+          releaseDraft: false
+          prerelease: false
+          # createUpdaterArtifacts is enabled only in CI (kept out of
+          # tauri.conf.json so local `npm run tauri:build` works without the
+          # signing key). This produces the .app.tar.gz + .sig + latest.json.
+          args: --target aarch64-apple-darwin --config '{"bundle":{"createUpdaterArtifacts":true}}'

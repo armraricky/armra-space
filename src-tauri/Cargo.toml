@@ -1,0 +1,45 @@
+[package]
+name = "s3-vault"
+version = "0.1.0"
+description = "ARMRA Space — mount S3 buckets with offline pinning"
+authors = ["you"]
+license = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "s3_vault_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.2", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.2", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+tauri-plugin-deep-link = "2"
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+reqwest = { version = "0.12", features = ["json"] }
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+url = "2"
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = "1"
+aws-credential-types = "1"
+anyhow = "1"
+dirs = "5"
+walkdir = "2"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+once_cell = "1"
+which = "6"
+aws-smithy-types = "1"
