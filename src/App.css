@@ -86,9 +86,14 @@
 
 .header-nav {
   display: flex;
+  align-items: center;
   gap: 2px;
   -webkit-app-region: no-drag;
 }
+/* The divider + email sit inside the nav — give them air so the email isn't
+   glued to the divider, and let flex centering align it vertically. */
+.header-nav .header-divider { margin: 0 10px; }
+.header-nav .header-email { line-height: 1; padding-right: 6px; }
 
 .nav-btn {
   background: none;

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ARMRA Space",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "com.armra.space",
   "build": {
     "frontendDist": "../dist",
@@ -15,9 +15,7 @@
         "title": "ARMRA Space",
         "width": 1100,
         "height": 720,
-        "minWidth": 800,
-        "minHeight": 500,
-        "resizable": true,
+        "resizable": false,
         "fullscreen": false
       }
     ],

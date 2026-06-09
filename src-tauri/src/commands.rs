@@ -191,7 +191,15 @@ async fn mount_current(state: &AppState) -> Result<MountStatusResponse, String> 
 
     let remote_path = remote_path_for(&cfg);
     let mount_point = mount::default_mount_point();
-    let rclone_bin = mount::resolve_rclone_binary(&state.config_dir);
+    let rclone_bin = match mount::resolve_rclone_binary(&state.config_dir) {
+        Ok(b) => b,
+        Err(e) => {
+            let mut ms = state.mount_state.lock().await;
+            ms.status = MountStatus::Error;
+            ms.error = Some(e.to_string());
+            return Err(e.to_string());
+        }
+    };
     let cache_dir = state.cache_dir.lock().unwrap().clone();
     // Viewers mount read-only — the client-side enforcement layer, which is
     // the only write guard in static-credential mode.

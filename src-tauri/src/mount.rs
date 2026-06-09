@@ -188,17 +188,36 @@ pub async fn kill_mount(state: &mut MountState) -> Result<()> {
     Ok(())
 }
 
-pub fn resolve_rclone_binary(app_dir: &PathBuf) -> String {
-    // Try bundled sidecar first, then system rclone.
+// GUI apps launched from Finder get a minimal PATH (/usr/bin:/bin:…) that does
+// NOT include Homebrew, so `which` alone misses a brew-installed rclone and the
+// spawn fails with "No such file or directory (os error 2)". Probe the known
+// install locations directly.
+#[cfg(target_os = "macos")]
+const RCLONE_PATHS: &[&str] = &[
+    "/opt/homebrew/bin/rclone", // Apple Silicon Homebrew
+    "/usr/local/bin/rclone",    // Intel Homebrew / manual installs
+    "/usr/bin/rclone",
+];
+#[cfg(target_os = "windows")]
+const RCLONE_PATHS: &[&str] = &["C:\\Program Files\\rclone\\rclone.exe"];
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+const RCLONE_PATHS: &[&str] = &["/usr/local/bin/rclone", "/usr/bin/rclone"];
+
+pub fn resolve_rclone_binary(app_dir: &PathBuf) -> Result<String> {
+    // Bundled sidecar first, then known absolute paths, then PATH.
     let bundled = app_dir.join("binaries").join(format!(
         "rclone-{}",
         std::env::consts::ARCH
     ));
     if bundled.exists() {
-        return bundled.to_string_lossy().into_owned();
+        return Ok(bundled.to_string_lossy().into_owned());
     }
-
+    for p in RCLONE_PATHS {
+        if std::path::Path::new(p).exists() {
+            return Ok((*p).to_string());
+        }
+    }
     which::which("rclone")
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "rclone".to_string())
+        .map_err(|_| anyhow::anyhow!("rclone isn’t installed. Open Terminal and run:  brew install rclone"))
 }
