@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ARMRA Space",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.armra.space",
   "build": {
     "frontendDist": "../dist",
@@ -31,7 +31,9 @@
     },
     "deep-link": {
       "desktop": {
-        "schemes": ["armra-space"]
+        "schemes": [
+          "armra-space"
+        ]
       }
     },
     "updater": {
@@ -47,7 +49,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "app"],
+    "targets": [
+      "dmg",
+      "app"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -58,11 +63,22 @@
     "macOS": {
       "minimumSystemVersion": "12.0",
       "dmg": {
-        "appPosition": { "x": 200, "y": 160 },
-        "applicationFolderPosition": { "x": 500, "y": 160 },
-        "windowSize": { "width": 700, "height": 380 }
+        "appPosition": {
+          "x": 200,
+          "y": 160
+        },
+        "applicationFolderPosition": {
+          "x": 500,
+          "y": 160
+        },
+        "windowSize": {
+          "width": 700,
+          "height": 380
+        }
       }
     },
-    "resources": ["../install-deps.command"]
+    "resources": [
+      "../install-deps.command"
+    ]
   }
 }
