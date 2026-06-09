@@ -135,7 +135,7 @@ pub async fn spawn_mount(
         config_path.to_str().unwrap(),
         "--vfs-cache-mode",
         "writes",           // write-through, reads go straight to S3
-        "--vfs-cache-dir",
+        "--cache-dir",      // global flag — VFS cache lands under <dir>/vfs ("--vfs-cache-dir" doesn't exist)
         cache_dir.to_str().unwrap(),
         "--dir-cache-time",
         "30s",
