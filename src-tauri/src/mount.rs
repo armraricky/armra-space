@@ -181,13 +181,17 @@ pub async fn spawn_mount(
     // Cap the read cache to the user's configured limit (0 = unlimited → off).
     let cache_max = if cache_max_mb > 0 { format!("{}M", cache_max_mb) } else { "off".to_string() };
 
-    // macOS: use rclone's NFS mount — it serves the remote over NFS on
-    // localhost and mounts it with the OS's BUILT-IN NFS client. No macFUSE,
-    // no kernel/system-extension approval, no reboot — the blocker that made
-    // FUSE mounts a non-starter for normal users. Same VFS flags apply.
-    // Windows keeps classic mount (WinFSP).
+    // macOS mount strategy:
+    //  - macFUSE installed → classic FUSE `mount` with `-o local`, which gives a
+    //    real LOCAL volume. Critical for creative apps that refuse network drives
+    //    for scratch/cache/lock files when working on project files.
+    //  - otherwise → NFS mount (built-in client, zero install friction, but the
+    //    OS classifies it as a network volume).
+    // Windows keeps classic mount (WinFSP). Same VFS flags apply to all.
     #[cfg(target_os = "macos")]
-    let mount_cmd = "nfsmount";
+    let use_macfuse = is_macfuse_available();
+    #[cfg(target_os = "macos")]
+    let mount_cmd = if use_macfuse { "mount" } else { "nfsmount" };
     #[cfg(not(target_os = "macos"))]
     let mount_cmd = "mount";
 
@@ -259,6 +263,16 @@ pub async fn spawn_mount(
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = volname;
 
+    // macFUSE-only mount options: mark the volume as LOCAL (so Finder/Spotlight
+    // and apps treat it like an internal disk) and suppress AppleDouble junk.
+    #[cfg(target_os = "macos")]
+    if use_macfuse {
+        args.push("--option");
+        args.push("local");
+        args.push("--option");
+        args.push("noappledouble");
+    }
+
     let child = Command::new(rclone_bin)
         .args(&args)
         .stdout(Stdio::null())
@@ -266,6 +280,18 @@ pub async fn spawn_mount(
         .spawn()?;
 
     Ok(child)
+}
+
+/// True if macFUSE (or legacy osxfuse) is installed, so we can mount a real
+/// LOCAL volume instead of an NFS network volume.
+#[cfg(target_os = "macos")]
+pub fn is_macfuse_available() -> bool {
+    std::path::Path::new("/Library/Filesystems/macfuse.fs").exists()
+        || std::path::Path::new("/Library/Filesystems/osxfuse.fs").exists()
+}
+#[cfg(not(target_os = "macos"))]
+pub fn is_macfuse_available() -> bool {
+    cfg!(windows) // WinFSP path is always a local-style mount
 }
 
 /// Is something currently mounted at this path? (Detects a stale mount left by

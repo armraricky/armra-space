@@ -114,6 +114,8 @@ export const api = {
   revealMountPoint: () => invoke<void>("reveal_mount_point"),
   refreshFiles: () => invoke<void>("refresh_files"),
   mountTransferStats: () => invoke<TransferStats>("mount_transfer_stats"),
+  macfuseAvailable: () => invoke<boolean>("macfuse_available"),
+  openUrl: (url: string) => invoke<void>("open_url", { url }),
   getVersion: () => _getVersion(),
 
   // Auth (ARMRA Quest)

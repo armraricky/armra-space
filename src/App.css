@@ -56,6 +56,13 @@
 .fs-open-btn { flex: none; white-space: nowrap; }
 .fs-error { background: rgba(217,95,59,0.1); border: 1px solid rgba(217,95,59,0.25); color: var(--red); padding: 10px 14px; border-radius: 10px; font-size: 12.5px; margin-bottom: 18px; line-height: 1.5; }
 
+/* Mount-mode banner (local disk vs network drive) */
+.fs-mode { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 14px; border-radius: 10px; font-size: 12.5px; margin-bottom: 18px; line-height: 1.4; }
+.fs-mode.local { background: rgba(230,255,127,0.1); border: 1px solid rgba(230,255,127,0.25); color: var(--text); }
+.fs-mode.net { background: var(--bg2); border: 1px solid var(--border); color: var(--text-dim); }
+.fs-mode-btn { flex-shrink: 0; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg3); color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer; }
+.fs-mode-btn:hover { border-color: var(--text-dim); }
+
 .fs-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
 .fs-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; margin-bottom: 18px; }
 .fs-card-wide { margin-top: 0; margin-bottom: 0; }

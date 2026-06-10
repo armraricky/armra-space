@@ -705,6 +705,26 @@ pub async fn refresh_files(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether macFUSE is installed — i.e. whether new mounts will be a true LOCAL
+/// volume (vs an NFS network volume). The UI uses this to label the mount and to
+/// prompt installing macFUSE for local-disk mode.
+#[tauri::command]
+pub fn macfuse_available() -> bool {
+    mount::is_macfuse_available()
+}
+
+/// Open a URL in the default browser (e.g. the macFUSE download page).
+#[tauri::command]
+pub async fn open_url(url: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(&url).spawn();
+    #[cfg(target_os = "windows")]
+    let r = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let r = std::process::Command::new("xdg-open").arg(&url).spawn();
+    r.map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// Open a native folder picker and return the chosen path (None if cancelled).
 /// Used to choose the offline-cache location. Runs on a worker thread (async
 /// command), so the blocking dialog call is safe.
