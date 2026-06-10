@@ -157,12 +157,15 @@ pub async fn spawn_mount(
     cache_dir: &PathBuf,
     read_only: bool,
     volname: &str,
+    cache_max_mb: u64,
 ) -> Result<Child> {
     // macOS: mount point must exist but be empty
     std::fs::create_dir_all(mount_point)?;
     std::fs::create_dir_all(cache_dir)?;
 
     let remote = format!("s3vault:{}", remote_path);
+    // Cap the read cache to the user's configured limit (0 = unlimited → off).
+    let cache_max = if cache_max_mb > 0 { format!("{}M", cache_max_mb) } else { "off".to_string() };
 
     // macOS: use rclone's NFS mount — it serves the remote over NFS on
     // localhost and mounts it with the OS's BUILT-IN NFS client. No macFUSE,
@@ -180,20 +183,28 @@ pub async fn spawn_mount(
         mount_point.to_str().unwrap(),
         "--config",
         config_path.to_str().unwrap(),
-        "--vfs-cache-mode",
-        "writes",           // write-through, reads go straight to S3
-        "--cache-dir",      // global flag — VFS cache lands under <dir>/vfs ("--vfs-cache-dir" doesn't exist)
-        cache_dir.to_str().unwrap(),
-        "--dir-cache-time",
-        "30s",
-        "--poll-interval",
-        "15s",
+        // Full VFS cache: reads land on local disk, so re-opens are instant and
+        // streaming is smooth (writes alone left every read going to S3).
+        "--vfs-cache-mode", "full",
+        "--cache-dir", cache_dir.to_str().unwrap(),
+        "--vfs-cache-max-size", &cache_max,
+        "--vfs-cache-max-age", "168h",
+        // Prefetch ahead of the read head + pull large files as parallel chunks
+        // — the difference between choppy and smooth video/large-asset playback.
+        "--vfs-read-ahead", "256M",
+        "--buffer-size", "64M",
+        "--vfs-read-chunk-size", "16M",
+        "--vfs-read-chunk-size-limit", "256M",
+        "--vfs-read-chunk-streams", "4",
+        "--transfers", "8",
+        // Longer dir cache → far fewer S3 list calls → snappier browsing.
+        "--dir-cache-time", "5m",
+        "--poll-interval", "30s",
         "--no-checksum",
         "--no-modtime",
         "--daemon=false",
         "--allow-non-empty",
-        "--log-level",
-        "ERROR",
+        "--log-level", "ERROR",
     ];
     if read_only {
         args.push("--read-only");

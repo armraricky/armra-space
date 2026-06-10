@@ -200,6 +200,7 @@ async fn mount_current(state: &AppState) -> Result<MountStatusResponse, String> 
         }
     };
     let cache_dir = state.cache_dir.lock().unwrap().clone();
+    let cache_max_mb = *state.cache_max_mb.lock().unwrap();
     // One lock: the active filespace gives both the mount subfolder name (so
     // the drive mounts INSIDE the branded ~/ARMRA Space folder, named by
     // filespace) and the role (viewers mount read-only — the only write guard
@@ -213,7 +214,7 @@ async fn mount_current(state: &AppState) -> Result<MountStatusResponse, String> 
     };
     let mount_point = mount::mount_point_for(&subdir);
 
-    match mount::spawn_mount(&rclone_bin, &config_path, &remote_path, &mount_point, &cache_dir, read_only, &subdir).await {
+    match mount::spawn_mount(&rclone_bin, &config_path, &remote_path, &mount_point, &cache_dir, read_only, &subdir, cache_max_mb).await {
         Ok(mut child) => {
             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
             // rclone runs in the foreground (--daemon=false), so if the mount

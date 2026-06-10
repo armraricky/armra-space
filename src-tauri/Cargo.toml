@@ -1,6 +1,6 @@
 [package]
 name = "s3-vault"
-version = "0.1.9"
+version = "0.1.10"
 description = "ARMRA Space — mount S3 buckets with offline pinning"
 authors = ["you"]
 license = ""
