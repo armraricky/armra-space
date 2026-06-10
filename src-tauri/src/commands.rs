@@ -505,6 +505,67 @@ pub async fn list_pins(state: State<'_, AppState>) -> Result<Vec<PinnedFile>, St
     db::list_pins(&conn).map_err(|e| e.to_string())
 }
 
+/// Pin an entire folder: recursively enumerate every file under it and pin each
+/// one, so the whole folder is available offline. Returns how many files were
+/// pinned. Kicks off a sync so the bytes start downloading immediately.
+#[tauri::command]
+pub async fn pin_folder(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    path: String,
+) -> Result<usize, String> {
+    let cfg = state.s3_config.lock().unwrap().clone().ok_or("No S3 config saved")?;
+    let client = s3client::make_client(&cfg).await.map_err(|e| e.to_string())?;
+    let objects = s3client::list_objects_recursive(&client, &cfg, &path)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let pins_root = state.cache_dir.lock().unwrap().join("pins");
+    let conn = db::open(&state.db_path).map_err(|e| e.to_string())?;
+    let mut count = 0;
+    for (key, size) in &objects {
+        if is_junk_name(key.rsplit('/').next().unwrap_or(key)) {
+            continue;
+        }
+        let pin = PinnedFile {
+            id: Uuid::new_v4().to_string(),
+            s3_key: key.clone(),
+            bucket: cfg.bucket.clone(),
+            local_path: pins_root.join(key).to_string_lossy().into_owned(),
+            size: *size,
+            last_synced: None,
+            is_cached: false,
+            etag: None,
+        };
+        db::upsert_pin(&conn, &pin).map_err(|e| e.to_string())?;
+        count += 1;
+    }
+
+    // Start downloading the newly-pinned files.
+    let db_path = state.db_path.clone();
+    let max_bytes = *state.cache_max_mb.lock().unwrap() * 1024 * 1024;
+    let progress = state.sync_progress.clone();
+    let cfg2 = cfg.clone();
+    tokio::spawn(async move {
+        let _ = sync::sync_pins(db_path, cfg2, max_bytes, progress, app_handle).await;
+    });
+
+    Ok(count)
+}
+
+/// Unpin a whole folder: remove every pin under it and delete the cached files.
+#[tauri::command]
+pub async fn unpin_folder(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let cfg = state.s3_config.lock().unwrap().clone().ok_or("No S3 config saved")?;
+    let prefix = s3client::build_prefix(&cfg, &path);
+    let conn = db::open(&state.db_path).map_err(|e| e.to_string())?;
+    let removed = db::delete_pins_under(&conn, &cfg.bucket, &prefix).map_err(|e| e.to_string())?;
+    for p in removed {
+        let _ = tokio::fs::remove_file(&p).await;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn start_sync(
     state: State<'_, AppState>,

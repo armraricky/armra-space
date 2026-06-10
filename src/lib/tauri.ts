@@ -94,6 +94,8 @@ export const api = {
   pinFile: (s3Key: string, size: number) =>
     invoke<PinnedFile>("pin_file", { s3Key, size }),
   unpinFile: (s3Key: string) => invoke<void>("unpin_file", { s3Key }),
+  pinFolder: (path: string) => invoke<number>("pin_folder", { path }),
+  unpinFolder: (path: string) => invoke<void>("unpin_folder", { path }),
   listPins: () => invoke<PinnedFile[]>("list_pins"),
   startSync: () => invoke<void>("start_sync"),
   getSyncProgress: () => invoke<SyncProgress>("get_sync_progress"),

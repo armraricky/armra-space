@@ -126,6 +126,43 @@ pub async fn list_objects(
     Ok(entries)
 }
 
+/// Recursively list every file object under a path (no delimiter), for pinning
+/// a whole folder. Returns (full_key, size) pairs, skipping folder markers and
+/// OS junk. Paginated, so it handles folders with thousands of files.
+pub async fn list_objects_recursive(
+    client: &Client,
+    cfg: &S3Config,
+    path: &str,
+) -> Result<Vec<(String, i64)>> {
+    let prefix = build_prefix(cfg, path);
+    let mut out: Vec<(String, i64)> = Vec::new();
+
+    let mut paginator = client
+        .list_objects_v2()
+        .bucket(&cfg.bucket)
+        .prefix(&prefix)
+        .into_paginator()
+        .send();
+
+    while let Some(page) = paginator.next().await {
+        let page = page?;
+        for obj in page.contents() {
+            if let Some(key) = obj.key() {
+                // Skip the folder marker itself and any sub-markers (keys ending in '/').
+                if key.ends_with('/') {
+                    continue;
+                }
+                let leaf = key.rsplit('/').next().unwrap_or(key);
+                if leaf.is_empty() {
+                    continue;
+                }
+                out.push((key.to_string(), obj.size().unwrap_or(0)));
+            }
+        }
+    }
+    Ok(out)
+}
+
 pub async fn download_object(
     client: &Client,
     bucket: &str,
@@ -171,7 +208,7 @@ pub async fn head_object(client: &Client, bucket: &str, key: &str) -> Result<(i6
     Ok((size, etag))
 }
 
-fn build_prefix(cfg: &S3Config, path: &str) -> String {
+pub fn build_prefix(cfg: &S3Config, path: &str) -> String {
     let base = cfg.prefix.as_deref().unwrap_or("").trim_matches('/');
     let path = path.trim_matches('/');
     if base.is_empty() && path.is_empty() {

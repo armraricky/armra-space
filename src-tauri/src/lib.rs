@@ -183,6 +183,8 @@ pub fn run() {
             commands::cached_listing,
             commands::pin_file,
             commands::unpin_file,
+            commands::pin_folder,
+            commands::unpin_folder,
             commands::list_pins,
             commands::start_sync,
             commands::get_sync_progress,

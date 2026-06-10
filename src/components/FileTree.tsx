@@ -93,6 +93,27 @@ export function FileTree({ pins, bucket, onPinsChange }: Props) {
     }
   };
 
+  // Pin/unpin a whole folder. Uses the RELATIVE path (consistent with how we
+  // navigate + how the backend re-applies the filespace prefix).
+  const togglePinFolder = async (entry: S3Entry) => {
+    if (!entry.is_dir) return;
+    const key = entry.key;
+    const relPath = path ? `${path}/${entry.name}` : entry.name;
+    const pinned = pins.some((p) => p.s3_key.startsWith(key));
+    setPinning((s) => new Set(s).add(key));
+    try {
+      if (pinned) await api.unpinFolder(relPath);
+      else await api.pinFolder(relPath);
+      onPinsChange();
+    } finally {
+      setPinning((s) => {
+        const next = new Set(s);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
+
   return (
     <div className="file-tree">
       <div className="breadcrumbs">
@@ -131,7 +152,8 @@ export function FileTree({ pins, bucket, onPinsChange }: Props) {
           </thead>
           <tbody>
             {entries.map((entry) => {
-              const isPinned = pinnedKeys.has(entry.key);
+              const folderPinned = entry.is_dir && pins.some((p) => p.s3_key.startsWith(entry.key));
+              const isPinned = entry.is_dir ? folderPinned : pinnedKeys.has(entry.key);
               const isLoading = pinning.has(entry.key);
               return (
                 <tr
@@ -143,7 +165,7 @@ export function FileTree({ pins, bucket, onPinsChange }: Props) {
                     {entry.is_dir ? (
                       <span
                         className="clickable dir-link"
-                        onClick={() => load(entry.key.replace(/\/$/, ""))}
+                        onClick={() => load(path ? `${path}/${entry.name}` : entry.name)}
                       >
                         {entry.name}
                       </span>
@@ -151,19 +173,21 @@ export function FileTree({ pins, bucket, onPinsChange }: Props) {
                       <span>{entry.name}</span>
                     )}
                   </td>
-                  <td className="file-size">{formatBytes(entry.size)}</td>
+                  <td className="file-size">{entry.is_dir ? "—" : formatBytes(entry.size)}</td>
                   <td className="file-date">{formatDate(entry.last_modified)}</td>
                   <td className="file-pin">
-                    {!entry.is_dir && (
-                      <button
-                        className={`pin-btn ${isPinned ? "pinned" : ""}`}
-                        onClick={() => togglePin(entry)}
-                        disabled={isLoading}
-                        title={isPinned ? "Unpin (remove offline cache)" : "Pin for offline access"}
-                      >
-                        {isLoading ? "…" : isPinned ? "⊘" : "⊕"}
-                      </button>
-                    )}
+                    <button
+                      className={`pin-btn ${isPinned ? "pinned" : ""}`}
+                      onClick={() => (entry.is_dir ? togglePinFolder(entry) : togglePin(entry))}
+                      disabled={isLoading}
+                      title={
+                        entry.is_dir
+                          ? (isPinned ? "Unpin folder (remove offline copies)" : "Pin entire folder for offline access")
+                          : (isPinned ? "Unpin (remove offline cache)" : "Pin for offline access")
+                      }
+                    >
+                      {isLoading ? "…" : isPinned ? "⊘" : "⊕"}
+                    </button>
                   </td>
                 </tr>
               );

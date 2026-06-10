@@ -99,6 +99,23 @@ pub fn delete_pin(conn: &Connection, bucket: &str, s3_key: &str) -> Result<()> {
     Ok(())
 }
 
+/// Delete every pin whose key lives under a folder prefix (folder unpin).
+/// Returns the local_paths removed so the caller can delete the cached files.
+pub fn delete_pins_under(conn: &Connection, bucket: &str, prefix: &str) -> Result<Vec<String>> {
+    let like = format!("{}%", prefix);
+    let mut stmt = conn.prepare(
+        "SELECT local_path FROM pins WHERE bucket = ?1 AND s3_key LIKE ?2",
+    )?;
+    let paths: Vec<String> = stmt
+        .query_map(params![bucket, &like], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    conn.execute(
+        "DELETE FROM pins WHERE bucket = ?1 AND s3_key LIKE ?2",
+        params![bucket, &like],
+    )?;
+    Ok(paths)
+}
+
 pub fn list_pins(conn: &Connection) -> Result<Vec<PinnedFile>> {
     let mut stmt = conn.prepare(
         "SELECT id, s3_key, bucket, local_path, size, last_synced, is_cached, etag FROM pins",
