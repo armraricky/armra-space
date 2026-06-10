@@ -121,6 +121,7 @@ export const api = {
   setCacheConfig: (path: string, maxMb: number) =>
     invoke<void>("set_cache_config", { path, maxMb }),
   revealCacheDir: () => invoke<void>("reveal_cache_dir"),
+  revealLogs: () => invoke<void>("reveal_logs"),
   pickFolder: (defaultPath?: string) => invoke<string | null>("pick_folder", { defaultPath: defaultPath ?? null }),
   openInFinder: (path: string) => invoke<void>("open_in_finder", { path }),
   revealMountPoint: () => invoke<void>("reveal_mount_point"),

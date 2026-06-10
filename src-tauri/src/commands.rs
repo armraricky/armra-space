@@ -781,6 +781,20 @@ pub async fn refresh_files(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Open the folder holding the rclone mount logs (rclone-<id>.log), so upload /
+/// permission errors can be inspected when a copy isn't reaching the bucket.
+#[tauri::command]
+pub async fn reveal_logs(state: State<'_, AppState>) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    let _ = std::fs::create_dir_all(&dir);
+    let p = dir.to_string_lossy().into_owned();
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open").arg(&p).spawn().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("explorer").arg(&p).spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Whether macFUSE is installed — i.e. whether new mounts will be a true LOCAL
 /// volume (vs an NFS network volume). The UI uses this to label the mount and to
 /// prompt installing macFUSE for local-disk mode.

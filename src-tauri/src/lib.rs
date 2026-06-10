@@ -217,6 +217,7 @@ pub fn run() {
             commands::get_mounts,
             commands::unmount_filespace,
             commands::refresh_filespace,
+            commands::reveal_logs,
         ])
         .build(tauri::generate_context!())
         .expect("error while building ARMRA Space")

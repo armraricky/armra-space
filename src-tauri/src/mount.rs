@@ -207,6 +207,9 @@ pub async fn spawn_mount(
     let cache_max = if cache_max_mb > 0 { format!("{}M", cache_max_mb) } else { "off".to_string() };
     // Private rc endpoint for THIS mount (each mounted filespace gets its own).
     let rc_addr = format!("127.0.0.1:{}", rc_port);
+    // Per-mount log file (next to its config) so upload/permission errors are
+    // captured for diagnosis instead of vanishing.
+    let log_file = config_path.with_extension("log").to_string_lossy().into_owned();
 
     // macOS mount strategy:
     //  - macFUSE installed → classic FUSE `mount` with `-o local`, which gives a
@@ -287,7 +290,8 @@ pub async fn spawn_mount(
         //   • anything that still lands → hidden in-app by is_junk_name() on list
         "--daemon=false",
         "--allow-non-empty",
-        "--log-level", "ERROR",
+        "--log-level", "INFO",
+        "--log-file", &log_file,
     ];
     if read_only {
         args.push("--read-only");
@@ -306,10 +310,12 @@ pub async fn spawn_mount(
     // and apps treat it like an internal disk) and suppress AppleDouble junk.
     #[cfg(target_os = "macos")]
     if use_macfuse {
+        // Present as a LOCAL volume. We do NOT pass `noappledouble`: it makes
+        // macFUSE reject the .DS_Store/._ sidecars Finder writes mid folder-copy,
+        // which aborts the copy with "error code -8062". Letting them through
+        // fixes folder copies; the junk is hidden in-app by is_junk_name().
         args.push("--option");
         args.push("local");
-        args.push("--option");
-        args.push("noappledouble");
         if let Some(ref vi) = volicon_opt {
             args.push("--option");
             args.push(vi);

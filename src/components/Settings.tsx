@@ -192,6 +192,15 @@ export function Settings() {
         </div>
       </section>
 
+      {/* ── Diagnostics ── */}
+      <section className="settings-section">
+        <h2>Diagnostics</h2>
+        <p className="label-hint" style={{ marginBottom: 10 }}>
+          If a copy isn’t reaching the cloud, open the mount logs and look for upload or permission errors.
+        </p>
+        <button className="btn-ghost" onClick={() => api.revealLogs()}>Open mount logs</button>
+      </section>
+
       {/* ── About ── */}
       <div className="settings-about">
         <span
