@@ -92,6 +92,17 @@ export default function App() {
     api.checkUpdate().then((u) => { if (u) setUpdate(u); }).catch(() => {});
   }, [loadFilespaces, refreshStatus]);
 
+  // Re-check for updates periodically. Closing the window hides the app to the
+  // tray (it keeps running), so the on-launch check alone means a long-running
+  // instance never learns about new releases — this surfaces them without a
+  // manual relaunch.
+  useEffect(() => {
+    const t = setInterval(() => {
+      api.checkUpdate().then((u) => { if (u) setUpdate(u); }).catch(() => {});
+    }, 30 * 60 * 1000); // every 30 minutes
+    return () => clearInterval(t);
+  }, []);
+
   // Auto-refresh STS creds ~5 min before expiry — only for the filespace that's
   // actually mounted (skip static / non-expiring, and skip when the selected
   // filespace isn't the mounted one).
