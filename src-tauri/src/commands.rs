@@ -1,8 +1,9 @@
 use crate::db::{self, PinnedFile};
-use crate::mount::{self, MountStatus, SharedMountState};
+use crate::mount::{self, MountStatus, MountState, Mounts};
 use crate::s3client::{self, S3Config, S3Entry};
 use crate::sync::{self, SharedSyncProgress, SyncProgress};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::State;
@@ -13,13 +14,31 @@ pub struct AppState {
     pub cache_dir: Mutex<PathBuf>,   // mutable — user can change it
     pub cache_max_mb: Mutex<u64>,    // 0 = unlimited
     pub config_dir: PathBuf,
+    // The SELECTED filespace — drives browsing, pinning, sync, list_files. This
+    // is distinct from what's MOUNTED: selecting a filespace loads its creds for
+    // browsing without necessarily mounting it.
     pub s3_config: Mutex<Option<S3Config>>,
-    pub mount_state: SharedMountState,
+    pub active_filespace: Mutex<Option<ActiveFilespace>>,
+    // All currently-mounted filespaces (multi-mount), keyed by filespace id.
+    pub mounts: Mounts,
+    // Per-filespace creds cache, so we can (re)mount or refresh a specific
+    // filespace's STS without disturbing the selected/browsed one.
+    pub fs_configs: Mutex<HashMap<String, (S3Config, ActiveFilespace)>>,
     pub sync_progress: SharedSyncProgress,
     // ARMRA Quest control-plane integration.
     pub quest_base: String,                                  // e.g. https://armra.quest
-    pub active_filespace: Mutex<Option<ActiveFilespace>>,    // currently-mounted scope
     pub pending_login: Mutex<Option<crate::auth::PendingPkce>>, // in-flight PKCE login
+}
+
+/// One mounted filespace, for the UI's connected list.
+#[derive(Debug, Serialize, Clone)]
+pub struct MountInfo {
+    pub id: String,
+    pub name: String,
+    pub status: MountStatus,
+    pub mount_point: Option<String>,
+    pub error: Option<String>,
+    pub expiration: Option<i64>,
 }
 
 /// The filespace currently mounted, with its STS expiry so the UI can refresh
@@ -154,83 +173,125 @@ fn remote_path_for(cfg: &S3Config) -> String {
     }
 }
 
-/// Mount whatever is in `s3_config` (manual creds or STS-scoped filespace creds).
-/// If something is already mounted, it's unmounted first — so this doubles as the
-/// refresh path when re-minting STS credentials before expiry.
-async fn mount_current(state: &AppState) -> Result<MountStatusResponse, String> {
-    let cfg = state
-        .s3_config
+fn mount_info(id: &str, ms: &MountState) -> MountInfo {
+    MountInfo {
+        id: id.to_string(),
+        name: ms.name.clone(),
+        status: ms.status.clone(),
+        mount_point: ms.mount_point.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        error: ms.error.clone(),
+        expiration: ms.expiration,
+    }
+}
+
+/// Fetch scoped STS creds for a filespace from Quest. Pure — does not touch
+/// app state — so it's shared by open (select) and refresh (re-mint) paths.
+async fn fetch_sts(state: &AppState, filespace_id: &str) -> Result<(S3Config, ActiveFilespace), String> {
+    let token = crate::auth::load_token().ok_or("Not signed in")?;
+    let base = state.quest_base.clone();
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/api/space/sts", base))
+        .bearer_auth(token)
+        .json(&serde_json::json!({ "filespaceId": filespace_id }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        return Err(body.get("error").and_then(|v| v.as_str()).unwrap_or("Failed to get credentials").to_string());
+    }
+    let sts: StsResp = resp.json().await.map_err(|e| e.to_string())?;
+    let prefix_opt = if sts.prefix.trim_matches('/').is_empty() { None } else { Some(sts.prefix.clone()) };
+    let cfg = S3Config {
+        bucket: sts.bucket.clone(),
+        region: sts.region.clone(),
+        access_key: sts.access_key_id.clone(),
+        secret_key: sts.secret_access_key.clone(),
+        endpoint: sts.endpoint.clone(),
+        prefix: prefix_opt,
+        session_token: sts.session_token.clone(),
+        accelerate: sts.accelerate.unwrap_or(false),
+    };
+    let active = ActiveFilespace {
+        id: sts.filespace_id.clone(),
+        name: sts.name.clone(),
+        role: sts.role.clone(),
+        remote_path: sts.remote_path.clone(),
+        expiration: sts.expiration,
+        mode: sts.mode.clone().unwrap_or_else(|| "federation".into()),
+    };
+    Ok((cfg, active))
+}
+
+/// Mark a mount errored and return the message (so callers can `return Err(...)`).
+async fn fail_mount(state: &AppState, id: &str, msg: String) -> String {
+    let mut mounts = state.mounts.lock().await;
+    if let Some(ms) = mounts.get_mut(id) {
+        ms.status = MountStatus::Error;
+        ms.error = Some(msg.clone());
+        ms.child = None;
+        ms.mount_point = None;
+    }
+    msg
+}
+
+/// Mount one filespace by id using creds cached in `fs_configs`, ADDING it to
+/// the mounted set without disturbing other live mounts. Re-mounting the same
+/// id (e.g. after an STS refresh) tears down just that one first.
+async fn do_mount(state: &AppState, id: &str) -> Result<MountInfo, String> {
+    let (cfg, active) = state
+        .fs_configs
         .lock()
         .unwrap()
-        .clone()
-        .ok_or("No filespace selected")?;
+        .get(id)
+        .cloned()
+        .ok_or("Filespace creds not loaded — open it first")?;
 
-    // Tear down any existing mount first (refresh-safe).
-    {
-        let mut ms = state.mount_state.lock().await;
-        if ms.status == MountStatus::Mounted {
-            let _ = mount::kill_mount(&mut ms).await;
+    // Tear down any existing mount for THIS id, then reserve a private rc port.
+    let rc_port = {
+        let mut mounts = state.mounts.lock().await;
+        if let Some(mut old) = mounts.remove(id) {
+            let _ = mount::kill_mount(&mut old).await;
         }
+        let used: Vec<u16> = mounts.values().map(|m| m.rc_port).collect();
+        let port = mount::pick_rc_port(&used);
+        let mut ms = MountState::new();
         ms.status = MountStatus::Mounting;
-    }
-
-    let config_path = match mount::write_rclone_config(
-        &state.config_dir,
-        &cfg.region,
-        &cfg.access_key,
-        &cfg.secret_key,
-        cfg.session_token.as_deref(),
-        cfg.endpoint.as_deref(),
-        cfg.accelerate,
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            // Reset state — otherwise status pollers see 'mounting' forever.
-            let mut ms = state.mount_state.lock().await;
-            ms.status = MountStatus::Error;
-            ms.error = Some(e.to_string());
-            return Err(e.to_string());
-        }
+        ms.rc_port = port;
+        ms.name = active.name.clone();
+        ms.expiration = active.expiration;
+        mounts.insert(id.to_string(), ms);
+        port
     };
 
+    let config_path = match mount::write_rclone_config(
+        &state.config_dir, id, &cfg.region, &cfg.access_key, &cfg.secret_key,
+        cfg.session_token.as_deref(), cfg.endpoint.as_deref(), cfg.accelerate,
+    ) {
+        Ok(p) => p,
+        Err(e) => return Err(fail_mount(state, id, e.to_string()).await),
+    };
     let remote_path = remote_path_for(&cfg);
     let rclone_bin = match mount::resolve_rclone_binary(&state.config_dir) {
         Ok(b) => b,
-        Err(e) => {
-            let mut ms = state.mount_state.lock().await;
-            ms.status = MountStatus::Error;
-            ms.error = Some(e.to_string());
-            return Err(e.to_string());
-        }
+        Err(e) => return Err(fail_mount(state, id, e.to_string()).await),
     };
     let cache_dir = state.cache_dir.lock().unwrap().clone();
     let cache_max_mb = *state.cache_max_mb.lock().unwrap();
-    // One lock: the active filespace gives both the mount subfolder name (so
-    // the drive mounts INSIDE the branded ~/ARMRA Space folder, named by
-    // filespace) and the role (viewers mount read-only — the only write guard
-    // in static-credential mode).
-    let (subdir, read_only) = {
-        let af = state.active_filespace.lock().unwrap();
-        match af.as_ref() {
-            Some(a) => (a.name.clone(), a.role == "viewer"),
-            None => (cfg.bucket.clone(), false), // legacy manual path
-        }
-    };
+    let subdir = active.name.clone();
+    let read_only = active.role == "viewer";
     let mount_point = mount::mount_point_for(&subdir);
 
-    // A previous app run (or a crash) can leave the path mounted with no child
-    // handle in this process. Detach that stale mount first so rclone doesn't
-    // fail with "already mounted" — the user just sees a clean reconnect.
+    // Detach a stale mount left at this path by a previous run/crash.
     if mount::is_path_mounted(&mount_point) {
         mount::force_unmount_stale(&mount_point).await;
     }
 
-    match mount::spawn_mount(&rclone_bin, &config_path, &remote_path, &mount_point, &cache_dir, read_only, &subdir, cache_max_mb).await {
+    match mount::spawn_mount(&rclone_bin, &config_path, &remote_path, &mount_point, &cache_dir, read_only, &subdir, cache_max_mb, rc_port).await {
         Ok(mut child) => {
             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-            // rclone runs in the foreground (--daemon=false), so if the mount
-            // failed (no macFUSE, bad/expired creds) the process has already
-            // exited. Probe before declaring success, and surface its stderr.
+            // Foreground rclone exits immediately if the mount failed; probe + surface stderr.
             match child.try_wait() {
                 Ok(Some(_status)) => {
                     let mut msg = String::new();
@@ -240,45 +301,82 @@ async fn mount_current(state: &AppState) -> Result<MountStatusResponse, String> 
                     }
                     let msg = if msg.trim().is_empty() {
                         "The mount helper exited before the drive was ready. Try again, or reinstall the latest ARMRA Space.".to_string()
-                    } else {
-                        msg.trim().to_string()
-                    };
-                    let mut ms = state.mount_state.lock().await;
-                    ms.status = MountStatus::Error;
-                    ms.error = Some(msg.clone());
-                    ms.child = None;
-                    ms.mount_point = None;
-                    Err(msg)
+                    } else { msg.trim().to_string() };
+                    Err(fail_mount(state, id, msg).await)
                 }
                 _ => {
-                    let mut ms = state.mount_state.lock().await;
-                    ms.child = Some(child);
-                    ms.status = MountStatus::Mounted;
-                    ms.mount_point = Some(mount_point.clone());
-                    ms.error = None;
-                    Ok(MountStatusResponse {
-                        status: MountStatus::Mounted,
-                        mount_point: Some(mount_point.to_string_lossy().into_owned()),
-                        error: None,
-                    })
+                    let mut mounts = state.mounts.lock().await;
+                    match mounts.get_mut(id) {
+                        Some(ms) => {
+                            ms.child = Some(child);
+                            ms.status = MountStatus::Mounted;
+                            ms.mount_point = Some(mount_point.clone());
+                            ms.error = None;
+                            Ok(mount_info(id, ms))
+                        }
+                        None => {
+                            // Raced with an unmount — clean up the orphan child.
+                            let _ = child.kill().await;
+                            Err("Mount was cancelled".into())
+                        }
+                    }
                 }
             }
         }
-        Err(e) => {
-            let mut ms = state.mount_state.lock().await;
-            ms.status = MountStatus::Error;
-            ms.error = Some(e.to_string());
-            Err(e.to_string())
-        }
+        Err(e) => Err(fail_mount(state, id, e.to_string()).await),
     }
 }
 
 #[tauri::command]
 pub async fn mount_bucket(state: State<'_, AppState>) -> Result<MountStatusResponse, String> {
-    if state.s3_config.lock().unwrap().is_none() {
-        return Err("No filespace selected".into());
+    // Mount the SELECTED filespace (set by open_filespace), alongside any others.
+    let id = state
+        .active_filespace
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|a| a.id.clone())
+        .ok_or("No filespace selected")?;
+    let info = do_mount(state.inner(), &id).await?;
+    Ok(MountStatusResponse { status: info.status, mount_point: info.mount_point, error: info.error })
+}
+
+/// All currently-mounted filespaces, for the UI's connected list.
+#[tauri::command]
+pub async fn get_mounts(state: State<'_, AppState>) -> Result<Vec<MountInfo>, String> {
+    let mounts = state.mounts.lock().await;
+    Ok(mounts.iter().map(|(id, ms)| mount_info(id, ms)).collect())
+}
+
+/// Unmount one filespace (leaves any others mounted).
+#[tauri::command]
+pub async fn unmount_filespace(state: State<'_, AppState>, filespace_id: String) -> Result<(), String> {
+    let mut mounts = state.mounts.lock().await;
+    if let Some(mut ms) = mounts.remove(&filespace_id) {
+        let _ = mount::kill_mount(&mut ms).await;
     }
-    mount_current(state.inner()).await
+    Ok(())
+}
+
+/// Re-mint STS creds for a mounted filespace and remount it with fresh creds —
+/// used to refresh before expiry without changing what's being browsed.
+#[tauri::command]
+pub async fn refresh_filespace(state: State<'_, AppState>, filespace_id: String) -> Result<(), String> {
+    let (cfg, active) = fetch_sts(state.inner(), &filespace_id).await?;
+    state.fs_configs.lock().unwrap().insert(filespace_id.clone(), (cfg.clone(), active.clone()));
+    // If this is also the SELECTED filespace, refresh the browse/pin/sync creds.
+    {
+        let is_selected = state.active_filespace.lock().unwrap().as_ref().map(|a| a.id == filespace_id).unwrap_or(false);
+        if is_selected {
+            *state.s3_config.lock().unwrap() = Some(cfg);
+            *state.active_filespace.lock().unwrap() = Some(active);
+        }
+    }
+    let is_mounted = state.mounts.lock().await.contains_key(&filespace_id);
+    if is_mounted {
+        do_mount(state.inner(), &filespace_id).await?;
+    }
+    Ok(())
 }
 
 // ── Filespaces (ARMRA Quest) ─────────────────────────────────────────────────
@@ -312,75 +410,49 @@ pub async fn open_filespace(
     state: State<'_, AppState>,
     filespace_id: String,
 ) -> Result<ActiveFilespace, String> {
-    let token = crate::auth::load_token().ok_or("Not signed in")?;
-    let base = state.quest_base.clone();
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{}/api/space/sts", base))
-        .bearer_auth(token)
-        .json(&serde_json::json!({ "filespaceId": filespace_id }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        let body: serde_json::Value = resp.json().await.unwrap_or_default();
-        return Err(body.get("error").and_then(|v| v.as_str()).unwrap_or("Failed to get credentials").to_string());
-    }
-    let sts: StsResp = resp.json().await.map_err(|e| e.to_string())?;
-
-    let prefix_opt = if sts.prefix.trim_matches('/').is_empty() {
-        None
-    } else {
-        Some(sts.prefix.clone())
-    };
-    let cfg = S3Config {
-        bucket: sts.bucket.clone(),
-        region: sts.region.clone(),
-        access_key: sts.access_key_id.clone(),
-        secret_key: sts.secret_access_key.clone(),
-        endpoint: sts.endpoint.clone(),
-        prefix: prefix_opt,
-        session_token: sts.session_token.clone(),
-        accelerate: sts.accelerate.unwrap_or(false),
-    };
-    let active = ActiveFilespace {
-        id: sts.filespace_id.clone(),
-        name: sts.name.clone(),
-        role: sts.role.clone(),
-        remote_path: sts.remote_path.clone(),
-        expiration: sts.expiration,
-        mode: sts.mode.clone().unwrap_or_else(|| "federation".into()),
-    };
-    // Hold both locks so the credentials and the role that scopes them update
-    // as one unit — a racing mount can never pair new creds with a stale role.
+    let (cfg, active) = fetch_sts(state.inner(), &filespace_id).await?;
+    // Make this the SELECTED filespace (drives browse/pin/sync) and cache its
+    // creds so it (or a refresh) can be mounted. Does NOT unmount anything.
     {
         let mut af = state.active_filespace.lock().unwrap();
         let mut sc = state.s3_config.lock().unwrap();
-        *sc = Some(cfg);
+        *sc = Some(cfg.clone());
         *af = Some(active.clone());
     }
+    state.fs_configs.lock().unwrap().insert(filespace_id.clone(), (cfg, active.clone()));
     Ok(active)
 }
 
-/// The currently-mounted filespace (id/name/role + STS expiry), if any.
+/// The currently-SELECTED filespace (id/name/role + STS expiry), if any.
 #[tauri::command]
 pub async fn get_active_filespace(state: State<'_, AppState>) -> Result<Option<ActiveFilespace>, String> {
     Ok(state.active_filespace.lock().unwrap().clone())
 }
 
+/// Unmount the SELECTED filespace (kept for compatibility; the UI uses
+/// unmount_filespace for a specific one).
 #[tauri::command]
 pub async fn unmount_bucket(state: State<'_, AppState>) -> Result<(), String> {
-    let mut ms = state.mount_state.lock().await;
-    mount::kill_mount(&mut ms).await.map_err(|e| e.to_string())
+    let id = state.active_filespace.lock().unwrap().as_ref().map(|a| a.id.clone());
+    if let Some(id) = id {
+        let mut mounts = state.mounts.lock().await;
+        if let Some(mut ms) = mounts.remove(&id) {
+            let _ = mount::kill_mount(&mut ms).await;
+        }
+    }
+    Ok(())
 }
 
+/// Status of the SELECTED filespace's mount (compat shim; UI uses get_mounts).
 #[tauri::command]
 pub async fn get_mount_status(state: State<'_, AppState>) -> Result<MountStatusResponse, String> {
-    let ms = state.mount_state.lock().await;
+    let id = state.active_filespace.lock().unwrap().as_ref().map(|a| a.id.clone());
+    let mounts = state.mounts.lock().await;
+    let entry = id.as_ref().and_then(|i| mounts.get(i));
     Ok(MountStatusResponse {
-        status: ms.status.clone(),
-        mount_point: ms.mount_point.as_ref().map(|p| p.to_string_lossy().into_owned()),
-        error: ms.error.clone(),
+        status: entry.map(|m| m.status.clone()).unwrap_or(MountStatus::Unmounted),
+        mount_point: entry.and_then(|m| m.mount_point.as_ref().map(|p| p.to_string_lossy().into_owned())),
+        error: entry.and_then(|m| m.error.clone()),
     })
 }
 
@@ -691,17 +763,21 @@ pub async fn open_in_finder(path: String) -> Result<(), String> {
 /// Best-effort: no-op when not mounted; rc errors are swallowed.
 #[tauri::command]
 pub async fn refresh_files(state: State<'_, AppState>) -> Result<(), String> {
-    {
-        let ms = state.mount_state.lock().await;
-        if !matches!(ms.status, MountStatus::Mounted) {
-            return Ok(());
-        }
+    // Refresh every mounted filespace on its own rc port.
+    let ports: Vec<u16> = {
+        let mounts = state.mounts.lock().await;
+        mounts.values().filter(|m| matches!(m.status, MountStatus::Mounted)).map(|m| m.rc_port).collect()
+    };
+    if ports.is_empty() {
+        return Ok(());
     }
     let rclone_bin = mount::resolve_rclone_binary(&state.config_dir).map_err(|e| e.to_string())?;
-    let _ = tokio::process::Command::new(&rclone_bin)
-        .args(["rc", "--rc-addr", "127.0.0.1:5572", "vfs/refresh", "recursive=true"])
-        .output()
-        .await;
+    for port in ports {
+        let _ = tokio::process::Command::new(&rclone_bin)
+            .args(["rc", "--rc-addr", &format!("127.0.0.1:{}", port), "vfs/refresh", "recursive=true"])
+            .output()
+            .await;
+    }
     Ok(())
 }
 
@@ -754,42 +830,45 @@ pub struct TransferStats {
 
 #[tauri::command]
 pub async fn mount_transfer_stats(state: State<'_, AppState>) -> Result<TransferStats, String> {
-    {
-        let ms = state.mount_state.lock().await;
-        if !matches!(ms.status, MountStatus::Mounted) {
-            return Ok(TransferStats::default());
-        }
+    // Aggregate live activity across ALL mounted filespaces (each its own port).
+    let ports: Vec<u16> = {
+        let mounts = state.mounts.lock().await;
+        mounts.values().filter(|m| matches!(m.status, MountStatus::Mounted)).map(|m| m.rc_port).collect()
+    };
+    if ports.is_empty() {
+        return Ok(TransferStats::default());
     }
     let rclone_bin = mount::resolve_rclone_binary(&state.config_dir).map_err(|e| e.to_string())?;
     let mut stats = TransferStats::default();
 
-    // core/stats → active transfers + aggregate speed (covers reads + writes).
-    if let Ok(out) = tokio::process::Command::new(&rclone_bin)
-        .args(["rc", "--rc-addr", "127.0.0.1:5572", "core/stats"])
-        .output()
-        .await
-    {
-        if out.status.success() {
-            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
-                stats.speed_bps = v.get("speed").and_then(|x| x.as_f64()).unwrap_or(0.0);
-                stats.active = v.get("transferring").and_then(|x| x.as_array()).map(|a| a.len() as u32).unwrap_or(0);
+    for port in ports {
+        let addr = format!("127.0.0.1:{}", port);
+        // core/stats → active transfers + aggregate speed (reads + writes).
+        if let Ok(out) = tokio::process::Command::new(&rclone_bin)
+            .args(["rc", "--rc-addr", &addr, "core/stats"])
+            .output()
+            .await
+        {
+            if out.status.success() {
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+                    stats.speed_bps += v.get("speed").and_then(|x| x.as_f64()).unwrap_or(0.0);
+                    stats.active += v.get("transferring").and_then(|x| x.as_array()).map(|a| a.len() as u32).unwrap_or(0);
+                }
             }
         }
-    }
-
-    // vfs/stats → uploads in progress/queued, so we can show an "uploading" state
-    // distinctly from "downloading" (reads).
-    if let Ok(out) = tokio::process::Command::new(&rclone_bin)
-        .args(["rc", "--rc-addr", "127.0.0.1:5572", "vfs/stats"])
-        .output()
-        .await
-    {
-        if out.status.success() {
-            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
-                if let Some(dc) = v.get("diskCache") {
-                    let inprog = dc.get("uploadsInProgress").and_then(|x| x.as_u64()).unwrap_or(0);
-                    let queued = dc.get("uploadsQueued").and_then(|x| x.as_u64()).unwrap_or(0);
-                    stats.uploading = (inprog + queued) as u32;
+        // vfs/stats → uploads in progress/queued (distinguish upload vs download).
+        if let Ok(out) = tokio::process::Command::new(&rclone_bin)
+            .args(["rc", "--rc-addr", &addr, "vfs/stats"])
+            .output()
+            .await
+        {
+            if out.status.success() {
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+                    if let Some(dc) = v.get("diskCache") {
+                        let inprog = dc.get("uploadsInProgress").and_then(|x| x.as_u64()).unwrap_or(0);
+                        let queued = dc.get("uploadsQueued").and_then(|x| x.as_u64()).unwrap_or(0);
+                        stats.uploading += (inprog + queued) as u32;
+                    }
                 }
             }
         }
@@ -800,13 +879,17 @@ pub async fn mount_transfer_stats(state: State<'_, AppState>) -> Result<Transfer
 
 #[tauri::command]
 pub async fn reveal_mount_point(state: State<'_, AppState>) -> Result<(), String> {
-    let mp = state
-        .mount_state
-        .lock()
-        .await
-        .mount_point
-        .clone()
-        .ok_or("Not mounted")?;
+    // Reveal the SELECTED filespace's mount (the one being browsed).
+    let id = state.active_filespace.lock().unwrap().as_ref().map(|a| a.id.clone());
+    let mp = {
+        let mounts = state.mounts.lock().await;
+        id.as_ref()
+            .and_then(|i| mounts.get(i))
+            .and_then(|m| m.mount_point.clone())
+            // Fall back to any mounted filespace if the selected one isn't mounted.
+            .or_else(|| mounts.values().find_map(|m| m.mount_point.clone()))
+            .ok_or("Not mounted")?
+    };
 
     #[cfg(target_os = "macos")]
     tokio::process::Command::new("open")

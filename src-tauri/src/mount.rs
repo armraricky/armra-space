@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -20,6 +21,9 @@ pub struct MountState {
     pub mount_point: Option<PathBuf>,
     pub child: Option<Child>,
     pub error: Option<String>,
+    pub rc_port: u16,             // this mount's private rclone rc port
+    pub name: String,            // filespace name (for tray / UI)
+    pub expiration: Option<i64>, // STS expiry (epoch ms), for refresh scheduling
 }
 
 impl MountState {
@@ -29,14 +33,30 @@ impl MountState {
             mount_point: None,
             child: None,
             error: None,
+            rc_port: 0,
+            name: String::new(),
+            expiration: None,
         }
     }
 }
 
-pub type SharedMountState = Arc<Mutex<MountState>>;
+// All currently-mounted filespaces, keyed by filespace id. Multiple filespaces
+// can be mounted at once — each is its own rclone process with a private rc port
+// and its own config file.
+pub type Mounts = Arc<Mutex<HashMap<String, MountState>>>;
 
-pub fn new_shared() -> SharedMountState {
-    Arc::new(Mutex::new(MountState::new()))
+pub fn new_mounts() -> Mounts {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
+/// Pick an rc port not already used by a live mount (rclone needs a unique
+/// 127.0.0.1:<port> per process for the remote-control API).
+pub fn pick_rc_port(used: &[u16]) -> u16 {
+    let mut port = 5572u16;
+    while used.contains(&port) {
+        port += 1;
+    }
+    port
 }
 
 /// rclone's S3 provider hint — AWS only when there's no custom endpoint.
@@ -64,6 +84,7 @@ fn rclone_provider(endpoint: Option<&str>) -> &'static str {
 /// and secret to authenticate temporary credentials. None for manual keys.
 pub fn write_rclone_config(
     config_dir: &PathBuf,
+    file_stem: &str,
     region: &str,
     access_key: &str,
     secret_key: &str,
@@ -72,7 +93,10 @@ pub fn write_rclone_config(
     accelerate: bool,
 ) -> Result<PathBuf> {
     std::fs::create_dir_all(config_dir)?;
-    let config_path = config_dir.join("rclone.conf");
+    // Per-filespace config file so multiple mounts can hold DIFFERENT creds at
+    // once (a single shared rclone.conf would have them clobber each other).
+    let safe: String = file_stem.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+    let config_path = config_dir.join(format!("rclone-{}.conf", safe));
 
     let provider = rclone_provider(endpoint);
     let session_line = match session_token {
@@ -162,6 +186,7 @@ pub async fn spawn_mount(
     read_only: bool,
     volname: &str,
     cache_max_mb: u64,
+    rc_port: u16,
 ) -> Result<Child> {
     // macOS: mount point must exist but be empty
     std::fs::create_dir_all(mount_point)?;
@@ -180,6 +205,8 @@ pub async fn spawn_mount(
     let remote = format!("s3vault:{}", remote_path);
     // Cap the read cache to the user's configured limit (0 = unlimited → off).
     let cache_max = if cache_max_mb > 0 { format!("{}M", cache_max_mb) } else { "off".to_string() };
+    // Private rc endpoint for THIS mount (each mounted filespace gets its own).
+    let rc_addr = format!("127.0.0.1:{}", rc_port);
 
     // macOS mount strategy:
     //  - macFUSE installed → classic FUSE `mount` with `-o local`, which gives a
@@ -249,7 +276,7 @@ pub async fn spawn_mount(
         // Remote-control endpoint so the app can force an immediate listing
         // refresh (vfs/refresh) after/while files change — no remount needed.
         "--rc",
-        "--rc-addr", "127.0.0.1:5572",
+        "--rc-addr", &rc_addr,
         "--rc-no-auth",
         // NOTE: do NOT use --exclude here. On a writable mount, when Finder copies
         // a file it also writes the AppleDouble sidecar (._name) and .DS_Store;

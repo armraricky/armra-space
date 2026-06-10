@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { api, onSyncProgress } from "./lib/tauri";
 import type {
-  MountStatus, Session, Filespace, ActiveFilespace, CacheConfig, Update, PinnedFile, SyncProgress, TransferStats,
+  MountInfo, Session, Filespace, ActiveFilespace, CacheConfig, Update, PinnedFile, SyncProgress, TransferStats,
 } from "./lib/tauri";
 import { LoginScreen } from "./components/LoginScreen";
 import { Settings } from "./components/Settings";
@@ -26,14 +26,13 @@ export default function App() {
   const [active, setActive] = useState<ActiveFilespace | null>(null);
   const [opening, setOpening] = useState(false);
 
-  const [mountStatus, setMountStatus] = useState<MountStatus>("unmounted");
-  const [mountPoint, setMountPoint] = useState<string | undefined>();
   const [mountError, setMountError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Which filespace is ACTUALLY mounted — distinct from the one selected in the
-  // sidebar. Selecting a filespace loads its creds but doesn't mount it, so the
-  // mounted indicator must track this, not the selection.
-  const [mountedId, setMountedId] = useState<string | null>(null);
+  // All currently-mounted filespaces (multi-mount). Selecting a filespace loads
+  // its creds for browsing without mounting; mounting ADDS it to this set.
+  const [mounts, setMounts] = useState<MountInfo[]>([]);
+  const mountOf = (id?: string | null) => mounts.find((m) => m.id === id && m.status === "mounted");
+  const anyMounted = mounts.some((m) => m.status === "mounted");
 
   const [cacheConfig, setCacheConfig] = useState<CacheConfig | null>(null);
   const [pins, setPins] = useState<PinnedFile[]>([]);
@@ -59,8 +58,10 @@ export default function App() {
     }
   }, []);
 
+  const reloadMounts = useCallback(() => { api.getMounts().then(setMounts).catch(() => {}); }, []);
+
   const refreshStatus = useCallback(() => {
-    api.getMountStatus().then((m) => { setMountStatus(m.status); setMountPoint(m.mount_point); });
+    api.getMounts().then(setMounts).catch(() => {});
     api.getCacheConfig().then(setCacheConfig).catch(() => {});
     api.listPins().then(setPins).catch(() => {});
   }, []);
@@ -108,15 +109,15 @@ export default function App() {
   // while mounted — files added elsewhere (e.g. uploaded on the web) then show
   // up in Finder within ~15s instead of needing a reconnect.
   useEffect(() => {
-    if (mountStatus !== "mounted") return;
+    if (!anyMounted) return;
     const t = setInterval(() => { api.refreshFiles().catch(() => {}); }, 15000);
     return () => clearInterval(t);
-  }, [mountStatus]);
+  }, [anyMounted]);
 
-  // Poll live transfer activity on the mounted drive (uploads/downloads to S3)
-  // so we can show a moving indicator while bytes are in flight.
+  // Poll live transfer activity across all mounts (uploads/downloads to S3) so
+  // we can show a moving indicator while bytes are in flight.
   useEffect(() => {
-    if (mountStatus !== "mounted") { setXfer(null); return; }
+    if (!anyMounted) { setXfer(null); return; }
     let alive = true;
     const tick = async () => {
       try { const s = await api.mountTransferStats(); if (alive) setXfer(s); } catch { /* ignore */ }
@@ -124,24 +125,25 @@ export default function App() {
     tick();
     const t = setInterval(tick, 1500);
     return () => { alive = false; clearInterval(t); };
-  }, [mountStatus]);
+  }, [anyMounted]);
 
-  // Auto-refresh STS creds ~5 min before expiry — only for the filespace that's
-  // actually mounted (skip static / non-expiring, and skip when the selected
-  // filespace isn't the mounted one).
+  // Auto-refresh STS creds before expiry for EVERY mounted filespace. A single
+  // interval scans the mounted set and re-mints any within ~5 min of lapsing
+  // (refresh_filespace remounts it with fresh creds, leaving others untouched).
   useEffect(() => {
-    if (!active?.expiration || active.id !== mountedId) return;
-    const delay = Math.max(30_000, active.expiration - Date.now() - 5 * 60 * 1000);
-    const t = setTimeout(async () => {
-      try {
-        const a = await api.openFilespace(active.id);
-        setActive(a);
-        const r = await api.mountBucket();
-        setMountStatus(r.status); setMountPoint(r.mount_point);
-      } catch { /* surfaced on next action */ }
-    }, delay);
-    return () => clearTimeout(t);
-  }, [active, mountedId]);
+    if (!anyMounted) return;
+    const t = setInterval(async () => {
+      const now = Date.now();
+      let changed = false;
+      for (const m of mounts) {
+        if (m.status === "mounted" && m.expiration && m.expiration - now < 5 * 60 * 1000) {
+          try { await api.refreshFilespace(m.id); changed = true; } catch { /* retry next tick */ }
+        }
+      }
+      if (changed) reloadMounts();
+    }, 60_000);
+    return () => clearInterval(t);
+  }, [anyMounted, mounts, reloadMounts]);
 
   const selectFilespace = async (fs: Filespace) => {
     setSelected(fs);
@@ -165,31 +167,34 @@ export default function App() {
   const openInBrowser = async () => {
     setBusy(true); setMountError(null);
     try {
-      // Mount this filespace if it isn't the currently-mounted one.
-      if (!(mountStatus === "mounted" && mountedId === selected?.id)) {
+      // Mount the selected filespace if it isn't already — ADDS it alongside any
+      // others (no longer ejects the previously-mounted one).
+      if (!mountOf(selected?.id)) {
+        // Make sure the selected filespace's creds are loaded before mounting.
+        if (active?.id !== selected?.id && selected) { const a = await api.openFilespace(selected.id); setActive(a); }
         const r = await api.mountBucket();
-        setMountStatus(r.status); setMountPoint(r.mount_point);
-        if (r.status !== "mounted") return;
-        setMountedId(selected?.id ?? null);
+        await reloadMounts();
+        if (r.status !== "mounted") { setMountError(r.error || "Mount failed"); return; }
       }
       await api.revealMountPoint();
     } catch (e) {
-      setMountStatus("error"); setMountError(String(e));
+      setMountError(String(e)); reloadMounts();
     } finally { setBusy(false); }
   };
 
-  const disconnect = async () => {
+  const disconnectFs = async (id: string) => {
     setBusy(true);
-    try { await api.unmountBucket(); setMountStatus("unmounted"); setMountPoint(undefined); setMountedId(null); }
+    try { await api.unmountFilespace(id); }
     catch (e) { setMountError(String(e)); }
-    finally { setBusy(false); }
+    finally { await reloadMounts(); setBusy(false); }
   };
+  const disconnect = async () => { if (selected) await disconnectFs(selected.id); };
 
   const signOut = async () => {
-    if (mountStatus === "mounted") { try { await api.unmountBucket(); } catch { /* ignore */ } }
+    try { await Promise.all(mounts.map((m) => api.unmountFilespace(m.id))); } catch { /* ignore */ }
     await api.logout();
     setSession(null); setSelected(null); setActive(null); setFilespaces([]);
-    setMountStatus("unmounted"); setMountPoint(undefined); setMountedId(null); setView("filespace");
+    setMounts([]); setView("filespace");
   };
 
   const installUpdate = async () => {
@@ -225,7 +230,7 @@ export default function App() {
             <div className="fs-list-empty">No filespaces yet — ask an admin to grant you access in ARMRA Quest.</div>
           ) : (
             filespaces.map((fs) => {
-              const isMounted = mountedId === fs.id && mountStatus === "mounted";
+              const isMounted = !!mountOf(fs.id);
               return (
                 <div
                   key={fs.id}
@@ -240,7 +245,7 @@ export default function App() {
                     <button
                       className="fs-eject"
                       title="Disconnect (unmount)"
-                      onClick={(e) => { e.stopPropagation(); disconnect(); }}
+                      onClick={(e) => { e.stopPropagation(); disconnectFs(fs.id); }}
                     >⏏</button>
                   )}
                   {isMounted && <span className="fs-item-dot on" title="mounted" />}
@@ -279,8 +284,8 @@ export default function App() {
               <FilespaceDetail
                 filespace={selected}
                 active={active}
-                mounted={mountStatus === "mounted" && mountedId === selected.id}
-                mountPoint={mountPoint}
+                mounted={!!mountOf(selected.id)}
+                mountPoint={mountOf(selected.id)?.mount_point}
                 cache={cacheConfig}
                 pinsCount={pins.length}
                 opening={opening}

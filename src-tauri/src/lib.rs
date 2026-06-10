@@ -79,10 +79,11 @@ pub fn run() {
                 cache_max_mb: Mutex::new(cache_max_mb),
                 config_dir,
                 s3_config: Mutex::new(None),
-                mount_state: mount::new_shared(),
+                active_filespace: Mutex::new(None),
+                mounts: mount::new_mounts(),
+                fs_configs: Mutex::new(std::collections::HashMap::new()),
                 sync_progress: sync::new_progress(),
                 quest_base,
-                active_filespace: Mutex::new(None),
                 pending_login: Mutex::new(None),
             });
 
@@ -150,11 +151,17 @@ pub fn run() {
                     let st = handle.state::<AppState>();
                     let af = st.active_filespace.lock().unwrap().clone();
                     let cache_pins = st.cache_dir.lock().unwrap().join("pins");
-                    let mounted = { st.mount_state.lock().await.status == MountStatus::Mounted };
-                    let fs_text = match af {
-                        Some(a) if mounted => format!("● {} — mounted", a.name),
-                        Some(a) => format!("○ {} — not mounted", a.name),
-                        None => "No filespace open".to_string(),
+                    let mounted_names: Vec<String> = {
+                        let mounts = st.mounts.lock().await;
+                        mounts.values().filter(|m| m.status == MountStatus::Mounted).map(|m| m.name.clone()).collect()
+                    };
+                    let fs_text = match mounted_names.len() {
+                        0 => match af {
+                            Some(a) => format!("○ {} — not mounted", a.name),
+                            None => "No filespace open".to_string(),
+                        },
+                        1 => format!("● {} — mounted", mounted_names[0]),
+                        n => format!("● {} filespaces mounted", n),
                     };
                     let used_mb = sync::disk_usage_bytes(cache_pins) as f64 / 1_048_576.0;
                     let _ = fs_i.set_text(fs_text);
@@ -207,6 +214,9 @@ pub fn run() {
             commands::list_filespaces,
             commands::open_filespace,
             commands::get_active_filespace,
+            commands::get_mounts,
+            commands::unmount_filespace,
+            commands::refresh_filespace,
         ])
         .build(tauri::generate_context!())
         .expect("error while building ARMRA Space")
@@ -218,9 +228,12 @@ pub fn run() {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let state = app_handle.state::<AppState>();
                 tauri::async_runtime::block_on(async {
-                    let mut ms = state.mount_state.lock().await;
-                    if matches!(ms.status, MountStatus::Mounted) {
-                        let _ = mount::kill_mount(&mut ms).await;
+                    // Eject every mounted filespace.
+                    let mut mounts = state.mounts.lock().await;
+                    for (_id, ms) in mounts.iter_mut() {
+                        if matches!(ms.status, MountStatus::Mounted) {
+                            let _ = mount::kill_mount(ms).await;
+                        }
                     }
                 });
             }
