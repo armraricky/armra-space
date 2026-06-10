@@ -268,6 +268,50 @@ pub async fn spawn_mount(
     Ok(child)
 }
 
+/// Is something currently mounted at this path? (Detects a stale mount left by
+/// a previous app run — the new process has no child handle for it.)
+pub fn is_path_mounted(mount_point: &PathBuf) -> bool {
+    let Some(mp) = mount_point.to_str() else { return false };
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(out) = std::process::Command::new("/sbin/mount").output() {
+            let listing = String::from_utf8_lossy(&out.stdout);
+            // mount lines look like: "…  on /Users/me/ARMRA Space/Creative (nfs, …)"
+            return listing.lines().any(|l| l.contains(&format!(" on {} ", mp)));
+        }
+        false
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = mp;
+        false
+    }
+}
+
+/// Force-detach a stale OS-level mount at this path (left over from a prior app
+/// run / crash) and kill the orphaned rclone serving it, so a fresh mount can
+/// take the path cleanly instead of rclone erroring "already mounted".
+pub async fn force_unmount_stale(mount_point: &PathBuf) {
+    let Some(mp) = mount_point.to_str() else { return };
+    #[cfg(target_os = "macos")]
+    {
+        // Detach the mount (try clean, then forced).
+        let out = tokio::process::Command::new("umount").arg(mp).output().await;
+        if out.map(|o| !o.status.success()).unwrap_or(true) {
+            let _ = tokio::process::Command::new("umount").args(["-f", mp]).output().await;
+        }
+        // Kill any orphaned rclone still serving this exact mount point. Scoped
+        // to the unique path so other filespaces' mounts are untouched.
+        let _ = tokio::process::Command::new("pkill").args(["-f", mp]).output().await;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = tokio::process::Command::new("net").args(["use", mp, "/delete"]).output().await;
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let _ = mp;
+}
+
 /// Kill rclone and unmount (macOS: diskutil unmount).
 pub async fn kill_mount(state: &mut MountState) -> Result<()> {
     if let Some(mut child) = state.child.take() {

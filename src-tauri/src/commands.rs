@@ -218,6 +218,13 @@ async fn mount_current(state: &AppState) -> Result<MountStatusResponse, String> 
     };
     let mount_point = mount::mount_point_for(&subdir);
 
+    // A previous app run (or a crash) can leave the path mounted with no child
+    // handle in this process. Detach that stale mount first so rclone doesn't
+    // fail with "already mounted" — the user just sees a clean reconnect.
+    if mount::is_path_mounted(&mount_point) {
+        mount::force_unmount_stale(&mount_point).await;
+    }
+
     match mount::spawn_mount(&rclone_bin, &config_path, &remote_path, &mount_point, &cache_dir, read_only, &subdir, cache_max_mb).await {
         Ok(mut child) => {
             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
