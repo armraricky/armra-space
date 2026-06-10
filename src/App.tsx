@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { api, onSyncProgress } from "./lib/tauri";
 import type {
-  MountStatus, Session, Filespace, ActiveFilespace, CacheConfig, Update, PinnedFile,
+  MountStatus, Session, Filespace, ActiveFilespace, CacheConfig, Update, PinnedFile, SyncProgress,
 } from "./lib/tauri";
 import { LoginScreen } from "./components/LoginScreen";
 import { Settings } from "./components/Settings";
@@ -40,6 +40,8 @@ export default function App() {
 
   const [update, setUpdate] = useState<Update | null>(null);
   const [updating, setUpdating] = useState<string | null>(null);
+  const [appVersion, setAppVersion] = useState<string>("");
+  const [sync, setSync] = useState<SyncProgress | null>(null);
 
   const loadFilespaces = useCallback(async () => {
     setRefreshing(true);
@@ -67,13 +69,17 @@ export default function App() {
     api.getCacheConfig().then(setCacheConfig).catch(() => {});
   }, []);
 
-  // Reflect pin downloads as they finish (pending → cached).
+  useEffect(() => { api.getVersion().then(setAppVersion).catch(() => {}); }, []);
+
+  // Live pin-download progress + reflect completions (pending → cached).
   useEffect(() => {
     const un = onSyncProgress((p) => {
-      if (p.total > 0 && p.done >= p.total) setTimeout(() => refreshPins(), 400);
+      setSync(p);
+      if (p.total > 0 && p.done >= p.total) setTimeout(() => { refreshPins(); setSync(null); }, 700);
     });
     return () => { un.then((f) => f()); };
   }, [refreshPins]);
+  const syncing = !!sync && sync.total > 0 && sync.done < sync.total;
 
   useEffect(() => {
     api.currentSession()
@@ -255,9 +261,10 @@ export default function App() {
               <div className="browse-layout">
                 <FileTree pins={pins} bucket={selected.name} onPinsChange={refreshPins} />
                 <div className="pins-col">
-                  <button className="btn-ghost pins-sync-btn" onClick={() => { api.startSync().catch(() => {}); }} title="Download all pending pins for offline use">
-                    ⭳ Sync pins{pins.some((p) => !p.is_cached) ? ` (${pins.filter((p) => !p.is_cached).length} pending)` : ""}
+                  <button className="btn-ghost pins-sync-btn" onClick={() => { api.startSync().catch(() => {}); }} disabled={syncing} title="Download all pending pins for offline use">
+                    {syncing ? `⭳ Pinning ${sync!.done}/${sync!.total}…` : `⭳ Sync pins${pins.some((p) => !p.is_cached) ? ` (${pins.filter((p) => !p.is_cached).length} pending)` : ""}`}
                   </button>
+                  {syncing && <PinProgress sync={sync!} />}
                   <PinsSidebar pins={pins} onPinsChange={refreshPins} onOpenFile={(p) => api.openInFinder(p)} />
                 </div>
               </div>
@@ -270,8 +277,29 @@ export default function App() {
           </div>
         )}
 
-        <div className="app-credit">Made by Ricky Mantilla</div>
+        {/* Global pin-progress bar — visible from any tab while pinning. */}
+        {syncing && (
+          <div className="pin-progress-global" title={sync!.current_key ? `Pinning ${sync!.current_key.split("/").pop()}` : "Pinning files"}>
+            <div className="pin-progress-global-fill" style={{ width: `${Math.round((sync!.done / sync!.total) * 100)}%` }} />
+          </div>
+        )}
+
+        <div className="app-footer">
+          {appVersion && <div className="app-version">v{appVersion}</div>}
+          <div className="app-credit">Made by Ricky Mantilla</div>
+        </div>
       </main>
+    </div>
+  );
+}
+
+function PinProgress({ sync }: { sync: SyncProgress }) {
+  const pct = sync.total > 0 ? Math.round((sync.done / sync.total) * 100) : 0;
+  return (
+    <div className="pin-progress">
+      <div className="pin-progress-top"><span>Pinning {sync.done}/{sync.total}</span><span>{pct}%</span></div>
+      <div className="pin-progress-bar"><div className="pin-progress-fill" style={{ width: `${pct}%` }} /></div>
+      {sync.current_key && <div className="pin-progress-file" title={sync.current_key}>{sync.current_key.split("/").pop()}</div>}
     </div>
   );
 }

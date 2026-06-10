@@ -56,9 +56,9 @@
 .fs-open-btn { flex: none; white-space: nowrap; }
 .fs-error { background: rgba(217,95,59,0.1); border: 1px solid rgba(217,95,59,0.25); color: var(--red); padding: 10px 14px; border-radius: 10px; font-size: 12.5px; margin-bottom: 18px; line-height: 1.5; }
 
-.fs-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.fs-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; margin-bottom: 16px; }
-.fs-card-wide { margin-top: 0; }
+.fs-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
+.fs-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; margin-bottom: 18px; }
+.fs-card-wide { margin-top: 0; margin-bottom: 0; }
 .fs-cards .fs-card { margin-bottom: 0; }
 .fs-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
 .fs-card-head h2 { font-size: 16px; font-weight: 600; color: var(--text-h); margin: 0; }
@@ -85,7 +85,20 @@
 .fs-disconnect { margin-top: 22px; background: none; border: none; color: var(--red); cursor: pointer; font-size: 13px; padding: 4px 0; opacity: 0.85; }
 .fs-disconnect:hover:not(:disabled) { opacity: 1; }
 
-.app-credit { position: fixed; right: 14px; bottom: 9px; font-size: 10.5px; color: var(--text-dim); opacity: 0.6; pointer-events: none; user-select: none; }
+.app-footer { position: fixed; right: 14px; bottom: 8px; text-align: right; pointer-events: none; user-select: none; line-height: 1.35; }
+.app-version { font-size: 10.5px; color: var(--text-dim); opacity: 0.7; font-variant-numeric: tabular-nums; }
+.app-credit { font-size: 10.5px; color: var(--text-dim); opacity: 0.55; }
+
+/* Pin progress — detailed bar in the pins column */
+.pin-progress { margin: 6px 0 12px; }
+.pin-progress-top { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-dim); margin-bottom: 5px; }
+.pin-progress-bar { height: 6px; background: var(--bg4); border-radius: 999px; overflow: hidden; }
+.pin-progress-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.3s ease; }
+.pin-progress-file { font-size: 11px; color: var(--text-dim); margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, Menlo, monospace; }
+
+/* Pin progress — slim global bar pinned to the bottom edge while syncing */
+.pin-progress-global { position: fixed; left: 0; right: 0; bottom: 0; height: 3px; background: var(--bg4); z-index: 60; }
+.pin-progress-global-fill { height: 100%; background: var(--accent); transition: width 0.3s ease; box-shadow: 0 0 8px rgba(230,255,127,0.5); }
 
 /* Eject button on a mounted sidebar item */
 .fs-eject { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; flex: none; }
