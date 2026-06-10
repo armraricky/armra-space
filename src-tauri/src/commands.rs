@@ -383,6 +383,19 @@ fn listing_key(cfg: &S3Config, path: &str) -> String {
     format!("{}:{}|{}", cfg.bucket, cfg.prefix.as_deref().unwrap_or(""), path)
 }
 
+/// True for OS-generated junk files that should never appear in the file list.
+fn is_junk_name(name: &str) -> bool {
+    name == ".DS_Store"
+        || name == "Thumbs.db"
+        || name == ".localized"
+        || name.starts_with("._")
+        || name.starts_with(".Spotlight-V")
+        || name.starts_with(".Trash")
+        || name == ".fseventsd"
+        || name == ".TemporaryItems"
+        || name == ".apdisk"
+}
+
 #[tauri::command]
 pub async fn list_files(
     state: State<'_, AppState>,
@@ -396,9 +409,12 @@ pub async fn list_files(
         .ok_or("No S3 config saved")?;
 
     let client = s3client::make_client(&cfg).await.map_err(|e| e.to_string())?;
-    let entries = s3client::list_objects(&client, &cfg, &path)
+    let mut entries = s3client::list_objects(&client, &cfg, &path)
         .await
         .map_err(|e| e.to_string())?;
+    // Hide macOS/Windows junk that can linger in the bucket (the rclone mount
+    // excludes these going forward, but older objects may still be present).
+    entries.retain(|e| !is_junk_name(&e.name));
     // Cache the listing so the browse tab can paint instantly next time.
     if let Ok(conn) = db::open(&state.db_path) {
         if let Ok(json) = serde_json::to_string(&entries) {
@@ -418,7 +434,10 @@ pub async fn cached_listing(
     let cfg = match state.s3_config.lock().unwrap().clone() { Some(c) => c, None => return Ok(None) };
     let conn = db::open(&state.db_path).map_err(|e| e.to_string())?;
     match db::get_listing_cache(&conn, &listing_key(&cfg, &path)).map_err(|e| e.to_string())? {
-        Some(json) => Ok(serde_json::from_str(&json).ok()),
+        Some(json) => {
+            let cached: Option<Vec<S3Entry>> = serde_json::from_str(&json).ok();
+            Ok(cached.map(|mut v| { v.retain(|e| !is_junk_name(&e.name)); v }))
+        }
         None => Ok(None),
     }
 }

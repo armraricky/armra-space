@@ -14,6 +14,21 @@ interface BreadcrumbItem {
   path: string;
 }
 
+// OS-generated junk that should never show in the file list.
+function isJunk(name: string): boolean {
+  return (
+    name === ".DS_Store" ||
+    name === "Thumbs.db" ||
+    name === ".localized" ||
+    name.startsWith("._") ||
+    name.startsWith(".Spotlight-V") ||
+    name.startsWith(".Trash") ||
+    name === ".fseventsd" ||
+    name === ".TemporaryItems" ||
+    name === ".apdisk"
+  );
+}
+
 export function FileTree({ pins, bucket, onPinsChange }: Props) {
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<S3Entry[]>([]);
@@ -30,12 +45,12 @@ export function FileTree({ pins, bucket, onPinsChange }: Props) {
     let hadCache = false;
     try {
       const cached = await api.cachedListing(p);
-      if (cached && cached.length) { setEntries(cached); hadCache = true; }
+      if (cached && cached.length) { setEntries(cached.filter((e) => !isJunk(e.name))); hadCache = true; }
     } catch { /* ignore */ }
     if (!hadCache) { setEntries([]); setLoading(true); }
     try {
       const result = await api.listFiles(p);
-      setEntries(result);
+      setEntries(result.filter((e) => !isJunk(e.name)));
     } catch (e) {
       if (!hadCache) setError(String(e));
     } finally {
