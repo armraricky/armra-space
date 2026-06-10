@@ -1,76 +1,71 @@
 import { useState, useEffect, useCallback } from "react";
-import { api, onSyncProgress } from "./lib/tauri";
+import { api } from "./lib/tauri";
 import type {
-  PinnedFile, MountStatus, SyncProgress, Session, Filespace, ActiveFilespace, Update,
+  MountStatus, Session, Filespace, ActiveFilespace, CacheConfig, Update,
 } from "./lib/tauri";
 import { LoginScreen } from "./components/LoginScreen";
 import { Settings } from "./components/Settings";
-import { FileTree } from "./components/FileTree";
-import { PinsSidebar } from "./components/PinsSidebar";
-import { StatusBar } from "./components/StatusBar";
+import { FilespaceDetail } from "./components/FilespaceDetail";
 import "./App.css";
 
-type View = "browser" | "settings";
+type View = "filespace" | "settings";
 
 export default function App() {
-  const [view, setView] = useState<View>("browser");
   const [session, setSession] = useState<Session | null>(null);
   const [sessionChecked, setSessionChecked] = useState(false);
+  const [view, setView] = useState<View>("filespace");
 
   const [filespaces, setFilespaces] = useState<Filespace[]>([]);
   const [filespacesError, setFilespacesError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [selected, setSelected] = useState<Filespace | null>(null);
   const [active, setActive] = useState<ActiveFilespace | null>(null);
-  const [opening, setOpening] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
 
   const [mountStatus, setMountStatus] = useState<MountStatus>("unmounted");
   const [mountPoint, setMountPoint] = useState<string | undefined>();
-  const [pins, setPins] = useState<PinnedFile[]>([]);
-  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [mountError, setMountError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const [cacheConfig, setCacheConfig] = useState<CacheConfig | null>(null);
+  const [pinsCount, setPinsCount] = useState(0);
 
   const [update, setUpdate] = useState<Update | null>(null);
   const [updating, setUpdating] = useState<string | null>(null);
 
-  const loadFilespaces = useCallback(() => {
-    api.listFilespaces()
-      .then((fs) => { setFilespaces(fs); setFilespacesError(null); })
-      .catch((e) => setFilespacesError(String(e)));
+  const loadFilespaces = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const fs = await api.listFilespaces();
+      setFilespaces(fs);
+      setFilespacesError(null);
+      return fs;
+    } catch (e) {
+      setFilespacesError(String(e));
+      return [];
+    } finally {
+      setRefreshing(false);
+    }
   }, []);
 
-  // Boot: validate the stored session, then load everything it gates.
+  const refreshStatus = useCallback(() => {
+    api.getMountStatus().then((m) => { setMountStatus(m.status); setMountPoint(m.mount_point); });
+    api.getCacheConfig().then(setCacheConfig).catch(() => {});
+    api.listPins().then((p) => setPinsCount(p.length)).catch(() => {});
+  }, []);
+
   useEffect(() => {
     api.currentSession()
       .then((s) => {
         setSession(s);
-        if (s) {
-          loadFilespaces();
-          api.getActiveFilespace().then(setActive);
-          api.getMountStatus().then((m) => { setMountStatus(m.status); setMountPoint(m.mount_point); });
-          api.listPins().then(setPins);
-        }
+        if (s) { loadFilespaces(); refreshStatus(); api.getActiveFilespace().then(setActive); }
       })
       .catch(() => setSession(null))
       .finally(() => setSessionChecked(true));
-
-    // Silent update check on launch — never blocks startup.
     api.checkUpdate().then((u) => { if (u) setUpdate(u); }).catch(() => {});
-  }, [loadFilespaces]);
+  }, [loadFilespaces, refreshStatus]);
 
-  useEffect(() => {
-    const unlisten = onSyncProgress((p) => {
-      setSyncProgress(p);
-      if (p.done === p.total && p.total > 0) {
-        setTimeout(() => api.listPins().then(setPins), 500);
-      }
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, []);
-
-  const refreshPins = useCallback(() => { api.listPins().then(setPins); }, []);
-
-  // STS credentials expire (≤1h). Re-mint 5 minutes before expiry and, if a
-  // drive is mounted, remount with the fresh creds (mount tears down + respawns).
-  // Static mode has expiration === null — nothing to refresh.
+  // Auto-refresh STS creds ~5 min before expiry (skip static / non-expiring).
   useEffect(() => {
     if (!active?.expiration) return;
     const delay = Math.max(30_000, active.expiration - Date.now() - 5 * 60 * 1000);
@@ -78,190 +73,148 @@ export default function App() {
       try {
         const a = await api.openFilespace(active.id);
         setActive(a);
-        if (mountStatus === "mounted") {
-          const r = await api.mountBucket();
-          setMountStatus(r.status);
-          setMountPoint(r.mount_point);
-        }
-      } catch {
-        // Refresh failed (offline / revoked) — the next user action surfaces it.
-      }
+        if (mountStatus === "mounted") { const r = await api.mountBucket(); setMountStatus(r.status); setMountPoint(r.mount_point); }
+      } catch { /* surfaced on next action */ }
     }, delay);
     return () => clearTimeout(t);
   }, [active, mountStatus]);
 
-  const handleAuthed = useCallback((s: Session) => {
-    setSession(s);
-    loadFilespaces();
-  }, [loadFilespaces]);
-
-  const openFilespace = async (fs: Filespace) => {
-    setOpening(fs.id);
+  const selectFilespace = async (fs: Filespace) => {
+    setSelected(fs);
+    setView("filespace");
     setMountError(null);
+    setOpening(true);
     try {
-      const a = await api.openFilespace(fs.id);
+      const a = await api.openFilespace(fs.id); // mint scoped creds for this scope
       setActive(a);
-      setView("browser");
+      refreshStatus();
     } catch (e) {
-      setFilespacesError(String(e));
-    } finally {
-      setOpening(null);
-    }
-  };
-
-  const handleMount = async () => {
-    setMountStatus("mounting");
-    setMountError(null);
-    try {
-      const result = await api.mountBucket();
-      setMountStatus(result.status);
-      setMountPoint(result.mount_point);
-    } catch (e) {
-      setMountStatus("error");
       setMountError(String(e));
+    } finally {
+      setOpening(false);
     }
   };
 
-  const handleUnmount = async () => {
-    await api.unmountBucket();
-    setMountStatus("unmounted");
-    setMountPoint(undefined);
+  const handleAuthed = useCallback((s: Session) => { setSession(s); loadFilespaces(); refreshStatus(); }, [loadFilespaces, refreshStatus]);
+
+  const openInBrowser = async () => {
+    setBusy(true); setMountError(null);
+    try {
+      if (mountStatus !== "mounted") {
+        const r = await api.mountBucket();
+        setMountStatus(r.status); setMountPoint(r.mount_point);
+        if (r.status !== "mounted") return;
+      }
+      await api.revealMountPoint();
+    } catch (e) {
+      setMountStatus("error"); setMountError(String(e));
+    } finally { setBusy(false); }
   };
 
-  const handleSync = async () => {
-    setSyncProgress({ total: 0, done: 0, errors: [] });
-    await api.startSync();
+  const disconnect = async () => {
+    setBusy(true);
+    try { await api.unmountBucket(); setMountStatus("unmounted"); setMountPoint(undefined); }
+    catch (e) { setMountError(String(e)); }
+    finally { setBusy(false); }
   };
 
-  const handleSignOut = async () => {
-    await api.logout();
+  const signOut = async () => {
     if (mountStatus === "mounted") { try { await api.unmountBucket(); } catch { /* ignore */ } }
-    setSession(null);
-    setActive(null);
-    setFilespaces([]);
-    setPins([]);
-    setMountStatus("unmounted");
-    setMountPoint(undefined);
-    setView("browser");
+    await api.logout();
+    setSession(null); setSelected(null); setActive(null); setFilespaces([]);
+    setMountStatus("unmounted"); setMountPoint(undefined); setView("filespace");
   };
 
   const installUpdate = async () => {
     if (!update) return;
     setUpdating("Downloading…");
-    try {
-      await api.installUpdate(update, (e) => {
-        if (e.event === "Started") setUpdating("Downloading…");
-        else if (e.event === "Finished") setUpdating("Installing…");
-      });
-    } catch (e) {
-      setUpdating(null);
-      setMountError(`Update failed: ${String(e)}`);
-    }
+    try { await api.installUpdate(update, (e) => { if (e.event === "Finished") setUpdating("Installing…"); }); }
+    catch (e) { setUpdating(null); setMountError(`Update failed: ${String(e)}`); }
   };
 
   if (!sessionChecked) return <div className="app-loading">Loading…</div>;
   if (!session) return <LoginScreen onAuthed={handleAuthed} />;
 
   return (
-    <div className="app">
-      <header className="app-header">
-        <div className="header-left">
-          <span className="armra-logo">
-            <img src="/armra-icon.svg" alt="ARMRA" className="armra-icon" />
-            <span className="app-wordmark">ARMRA</span>
-            <span className="app-product">Space</span>
-          </span>
-          {active && (
-            <>
-              <span className="header-divider" />
-              <span className="bucket-name">{active.name}</span>
-              {active.role === "viewer" && <span className="fs-tag">read-only</span>}
-              {active.mode === "static" && (
-                <span className="fs-tag warn" title="This deployment's key can't mint scoped credentials — mounting with the shared key, locked to this folder.">
-                  direct key
-                </span>
-              )}
-            </>
-          )}
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="sidebar-logo">
+          <img src="/armra-icon.svg" alt="ARMRA" className="armra-icon" />
+          <span className="app-wordmark">ARMRA</span>
+          <span className="app-product">Space</span>
         </div>
-        <nav className="header-nav">
-          <button className={`nav-btn ${view === "browser" ? "active" : ""}`} onClick={() => setView("browser")}>Files</button>
-          <button className={`nav-btn ${view === "settings" ? "active" : ""}`} onClick={() => setView("settings")}>Settings</button>
-          <span className="header-divider" />
-          <span className="header-email" title={session.email}>{session.email}</span>
-          <button className="nav-btn" onClick={handleSignOut}>Sign out</button>
-        </nav>
-      </header>
 
-      {update && (
-        <div className="update-banner">
-          Version {update.version} is available.
-          <button className="update-btn" disabled={!!updating} onClick={installUpdate}>
-            {updating || "Update & restart"}
+        <div className="sidebar-section-head">
+          <span>Filespaces</span>
+          <button className="icon-btn" title="Refresh" onClick={() => loadFilespaces()} disabled={refreshing}>
+            <span className={refreshing ? "spin" : ""}>⟳</span>
           </button>
         </div>
-      )}
 
-      {/* Filespace selector */}
-      <div className="filespace-bar">
-        {filespacesError ? (
-          <span className="filespace-error">{filespacesError}</span>
-        ) : filespaces.length === 0 ? (
-          <span className="filespace-empty">No filespaces yet — ask an admin to grant you access in ARMRA Quest.</span>
-        ) : (
-          filespaces.map((fs) => (
-            <button
-              key={fs.id}
-              className={`filespace-chip ${active?.id === fs.id ? "active" : ""}`}
-              disabled={opening === fs.id}
-              onClick={() => openFilespace(fs)}
-              title={`${fs.bucket}/${fs.prefix} · ${fs.role}`}
-            >
-              {opening === fs.id ? "Opening…" : fs.name}
-            </button>
-          ))
-        )}
-      </div>
+        <nav className="fs-list">
+          {filespacesError ? (
+            <div className="fs-list-empty error-text">{filespacesError}</div>
+          ) : filespaces.length === 0 ? (
+            <div className="fs-list-empty">No filespaces yet — ask an admin to grant you access in ARMRA Quest.</div>
+          ) : (
+            filespaces.map((fs) => (
+              <button
+                key={fs.id}
+                className={`fs-item ${selected?.id === fs.id ? "active" : ""}`}
+                onClick={() => selectFilespace(fs)}
+                title={`${fs.bucket}/${fs.prefix}`}
+              >
+                <span className="fs-item-glyph">◉</span>
+                <span className="fs-item-name">{fs.name}</span>
+                {active?.id === fs.id && mountStatus === "mounted" && <span className="fs-item-dot on" title="mounted" />}
+              </button>
+            ))
+          )}
+        </nav>
 
-      {active && (
-        <StatusBar
-          mountStatus={mountStatus}
-          mountPoint={mountPoint}
-          syncProgress={syncProgress}
-          onMount={handleMount}
-          onUnmount={handleUnmount}
-          onReveal={() => api.revealMountPoint()}
-          onSync={handleSync}
-          hasConfig={!!active}
-        />
-      )}
+        <div className="sidebar-foot">
+          <button className={`sidebar-link ${view === "settings" ? "active" : ""}`} onClick={() => setView("settings")}>⚙ Settings</button>
+          <div className="sidebar-account">
+            <span className="sidebar-email" title={session.email}>{session.email}</span>
+            <button className="sidebar-link sm" onClick={signOut}>Sign out</button>
+          </div>
+        </div>
+      </aside>
 
-      {mountError && <div className="mount-error-banner">{mountError}</div>}
-
-      <main className="app-main">
-        {view === "settings" ? (
-          <Settings />
-        ) : (
-          <div className="browser-layout">
-            {active ? (
-              <FileTree
-                key={active.id}
-                pins={pins}
-                bucket={active.name}
-                onPinsChange={refreshPins}
-              />
-            ) : (
-              <div className="no-config">
-                <p>Select a filespace above to browse and mount it.</p>
-              </div>
-            )}
-            <PinsSidebar
-              pins={pins}
-              onPinsChange={refreshPins}
-              onOpenFile={(path) => api.openInFinder(path)}
-            />
+      <main className="detail">
+        {update && (
+          <div className="update-banner">
+            Version {update.version} is available.
+            <button className="update-btn" disabled={!!updating} onClick={installUpdate}>{updating || "Update & restart"}</button>
           </div>
         )}
+
+        {view === "settings" ? (
+          <div className="detail-scroll"><Settings /></div>
+        ) : selected ? (
+          <FilespaceDetail
+            filespace={selected}
+            active={active}
+            mountStatus={mountStatus}
+            mountPoint={mountPoint}
+            cache={cacheConfig}
+            pinsCount={pinsCount}
+            opening={opening}
+            busy={busy}
+            error={mountError}
+            onOpen={openInBrowser}
+            onDisconnect={disconnect}
+            onManageCache={() => setView("settings")}
+            onRevealCache={() => api.revealCacheDir()}
+          />
+        ) : (
+          <div className="detail-empty">
+            <img src="/armra-icon.svg" alt="" className="detail-empty-icon" />
+            <p>Select a filespace to connect it.</p>
+          </div>
+        )}
+
+        <div className="app-credit">Made by Ricky Mantilla</div>
       </main>
     </div>
   );
