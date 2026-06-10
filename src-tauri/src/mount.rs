@@ -222,6 +222,12 @@ pub async fn spawn_mount(
         // ~1999 date); --use-server-modtime avoids the per-object metadata HEAD
         // that plain modtime reads would cost, so it stays fast.
         "--use-server-modtime",
+        // Treat `<folder>/` marker objects as real directories. They carry a
+        // LastModified (set when the folder was created), so with
+        // --use-server-modtime a folder shows its real creation date instead of
+        // rclone's placeholder (~1999). rclone also writes a marker on mkdir, so
+        // folders made in Finder get a date too.
+        "--s3-directory-markers",
         // Remote-control endpoint so the app can force an immediate listing
         // refresh (vfs/refresh) after/while files change — no remount needed.
         "--rc",
