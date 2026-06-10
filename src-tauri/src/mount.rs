@@ -205,7 +205,11 @@ pub async fn spawn_mount(
         "--dir-cache-time", "5m",
         "--poll-interval", "30s",
         "--no-checksum",
-        "--no-modtime",
+        // Use S3's LastModified as the file's mod time (the real upload date) so
+        // Finder shows correct dates. NOT --no-modtime (that shows a placeholder
+        // ~1999 date); --use-server-modtime avoids the per-object metadata HEAD
+        // that plain modtime reads would cost, so it stays fast.
+        "--use-server-modtime",
         "--daemon=false",
         "--allow-non-empty",
         "--log-level", "ERROR",
