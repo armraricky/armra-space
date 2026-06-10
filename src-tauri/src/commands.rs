@@ -599,6 +599,25 @@ pub async fn open_in_finder(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Force the mounted drive to re-list from S3 (rclone rc vfs/refresh) so files
+/// added elsewhere — e.g. uploaded on the web — appear without a remount.
+/// Best-effort: no-op when not mounted; rc errors are swallowed.
+#[tauri::command]
+pub async fn refresh_files(state: State<'_, AppState>) -> Result<(), String> {
+    {
+        let ms = state.mount_state.lock().await;
+        if !matches!(ms.status, MountStatus::Mounted) {
+            return Ok(());
+        }
+    }
+    let rclone_bin = mount::resolve_rclone_binary(&state.config_dir).map_err(|e| e.to_string())?;
+    let _ = tokio::process::Command::new(&rclone_bin)
+        .args(["rc", "--rc-addr", "127.0.0.1:5572", "vfs/refresh", "recursive=true"])
+        .output()
+        .await;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn reveal_mount_point(state: State<'_, AppState>) -> Result<(), String> {
     let mp = state

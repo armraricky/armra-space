@@ -103,6 +103,7 @@ export const api = {
   revealCacheDir: () => invoke<void>("reveal_cache_dir"),
   openInFinder: (path: string) => invoke<void>("open_in_finder", { path }),
   revealMountPoint: () => invoke<void>("reveal_mount_point"),
+  refreshFiles: () => invoke<void>("refresh_files"),
   getVersion: () => _getVersion(),
 
   // Auth (ARMRA Quest)

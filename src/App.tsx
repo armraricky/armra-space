@@ -103,6 +103,15 @@ export default function App() {
     return () => clearInterval(t);
   }, []);
 
+  // Keep the mounted drive current: S3 has no change-push, so poll a VFS refresh
+  // while mounted — files added elsewhere (e.g. uploaded on the web) then show
+  // up in Finder within ~15s instead of needing a reconnect.
+  useEffect(() => {
+    if (mountStatus !== "mounted") return;
+    const t = setInterval(() => { api.refreshFiles().catch(() => {}); }, 15000);
+    return () => clearInterval(t);
+  }, [mountStatus]);
+
   // Auto-refresh STS creds ~5 min before expiry — only for the filespace that's
   // actually mounted (skip static / non-expiring, and skip when the selected
   // filespace isn't the mounted one).
@@ -267,6 +276,7 @@ export default function App() {
                 onDisconnect={disconnect}
                 onManageCache={() => setView("settings")}
                 onRevealCache={() => api.revealCacheDir()}
+                onRefresh={() => api.refreshFiles().catch(() => {})}
               />
             ) : (
               <div className="browse-layout">

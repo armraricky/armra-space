@@ -25,11 +25,12 @@ interface Props {
   onDisconnect: () => void;
   onManageCache: () => void;
   onRevealCache: () => void;
+  onRefresh: () => void;
 }
 
 export function FilespaceDetail({
   filespace, active, mounted, mountPoint, cache, pinsCount,
-  opening, busy, error, onOpen, onDisconnect, onManageCache, onRevealCache,
+  opening, busy, error, onOpen, onDisconnect, onManageCache, onRevealCache, onRefresh,
 }: Props) {
   const working = busy || opening;
   const status = working ? { label: "Connecting…", cls: "warn" }
@@ -100,6 +101,7 @@ export function FilespaceDetail({
         <div className="fs-card-links">
           <button className="link-btn" onClick={onManageCache}>Manage cache size</button>
           <button className="link-btn" onClick={onRevealCache}>Reveal cache folder ↗</button>
+          {mounted && <button className="link-btn" onClick={onRefresh}>↻ Refresh files</button>}
         </div>
       </section>
 

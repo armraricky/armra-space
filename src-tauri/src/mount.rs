@@ -201,15 +201,22 @@ pub async fn spawn_mount(
         "--vfs-read-chunk-size-limit", "256M",
         "--vfs-read-chunk-streams", "4",
         "--transfers", "8",
-        // Longer dir cache → far fewer S3 list calls → snappier browsing.
-        "--dir-cache-time", "5m",
-        "--poll-interval", "30s",
+        // Short dir cache so files added elsewhere (e.g. uploaded on the web)
+        // appear quickly on re-listing. S3 has no change-push, so this + the
+        // on-demand vfs/refresh below (rc) is how the mount stays current.
+        "--dir-cache-time", "10s",
+        "--poll-interval", "10s",
         "--no-checksum",
         // Use S3's LastModified as the file's mod time (the real upload date) so
         // Finder shows correct dates. NOT --no-modtime (that shows a placeholder
         // ~1999 date); --use-server-modtime avoids the per-object metadata HEAD
         // that plain modtime reads would cost, so it stays fast.
         "--use-server-modtime",
+        // Remote-control endpoint so the app can force an immediate listing
+        // refresh (vfs/refresh) after/while files change — no remount needed.
+        "--rc",
+        "--rc-addr", "127.0.0.1:5572",
+        "--rc-no-auth",
         "--daemon=false",
         "--allow-non-empty",
         "--log-level", "ERROR",
