@@ -6,13 +6,24 @@ mod s3client;
 mod sync;
 
 use commands::AppState;
+use mount::MountStatus;
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Closing the window hides it instead of quitting — the menu-bar (tray)
+        // item keeps ARMRA Space running so mounts stay live. Quit from the tray.
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -84,6 +95,72 @@ pub fn run() {
             // Best-effort runtime scheme registration (needed for dev / Linux / Windows;
             // macOS registers via the bundle Info.plist from tauri.conf.json).
             let _ = app.deep_link().register_all();
+
+            // ── Menu-bar (tray) item ──────────────────────────────────────────
+            // Keeps ARMRA Space accessible from the menu bar with live status
+            // (mounted filespace + cache usage) and quick actions.
+            let status_i = MenuItem::with_id(app, "status", "ARMRA Space", false, None::<&str>)?;
+            let fs_i = MenuItem::with_id(app, "fs", "No filespace open", false, None::<&str>)?;
+            let cache_i = MenuItem::with_id(app, "cache", "Cache: —", false, None::<&str>)?;
+            let open_i = MenuItem::with_id(app, "open", "Open ARMRA Space", true, None::<&str>)?;
+            let folder_i = MenuItem::with_id(app, "folder", "Open files folder", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[
+                &status_i,
+                &PredefinedMenuItem::separator(app)?,
+                &fs_i, &cache_i,
+                &PredefinedMenuItem::separator(app)?,
+                &open_i, &folder_i,
+                &PredefinedMenuItem::separator(app)?,
+                &quit_i,
+            ])?;
+
+            let _tray = TrayIconBuilder::with_id("armra-space-tray")
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("ARMRA Space")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => {
+                        if let Some(w) = app.get_webview_window("main") { let _ = w.show(); let _ = w.set_focus(); }
+                    }
+                    "folder" => {
+                        let dir = mount::brand_base_dir();
+                        let _ = std::fs::create_dir_all(&dir);
+                        #[cfg(target_os = "macos")]
+                        let _ = std::process::Command::new("open").arg(&dir).spawn();
+                        #[cfg(target_os = "windows")]
+                        let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+                        if let Some(w) = tray.app_handle().get_webview_window("main") { let _ = w.show(); let _ = w.set_focus(); }
+                    }
+                })
+                .build(app)?;
+
+            // Refresh the tray status lines every 15s.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    let st = handle.state::<AppState>();
+                    let af = st.active_filespace.lock().unwrap().clone();
+                    let cache_pins = st.cache_dir.lock().unwrap().join("pins");
+                    let mounted = { st.mount_state.lock().await.status == MountStatus::Mounted };
+                    let fs_text = match af {
+                        Some(a) if mounted => format!("● {} — mounted", a.name),
+                        Some(a) => format!("○ {} — not mounted", a.name),
+                        None => "No filespace open".to_string(),
+                    };
+                    let used_mb = sync::disk_usage_bytes(cache_pins) as f64 / 1_048_576.0;
+                    let _ = fs_i.set_text(fs_text);
+                    let _ = cache_i.set_text(format!("Cache: {:.0} MB", used_mb));
+                    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                }
+            });
 
             // Create + brand the ~/ARMRA Space folder (green-Q icon). Filespaces
             // mount INSIDE it — macOS won't icon an NFS volume root, so this
