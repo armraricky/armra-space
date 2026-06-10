@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# rclone sidecar — staged by scripts/fetch-rclone.sh, fetched in CI
+src-tauri/binaries/

@@ -19,7 +19,7 @@ die()    { echo -e "  ${RED}✗${RESET} $1"; exit 1; }
 
 clear
 echo -e "${BOLD}ARMRA Space — Dependency Installer${RESET}"
-echo -e "${DIM}This installs rclone and macFUSE, which are required for S3 mounting.${RESET}"
+echo -e "${DIM}This installs macFUSE, required for mounting. (rclone ships inside ARMRA Space.)${RESET}"
 echo ""
 
 # ── 1. Homebrew ──────────────────────────────────────────────────────────────
@@ -37,14 +37,8 @@ else
 fi
 
 # ── 2. rclone ────────────────────────────────────────────────────────────────
-header "Checking rclone…"
-if command -v rclone &>/dev/null; then
-    ok "rclone already installed ($(rclone --version | head -1))"
-else
-    warn "rclone not found — installing…"
-    brew install rclone
-    ok "rclone installed"
-fi
+# Not installed here anymore: ARMRA Space bundles the official rclone build.
+# (Homebrew's rclone can't FUSE-mount on macOS, so installing it was a trap.)
 
 # ── 3. macFUSE ───────────────────────────────────────────────────────────────
 header "Checking macFUSE…"

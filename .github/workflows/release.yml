@@ -33,6 +33,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
+      # Stage the OFFICIAL rclone build as a bundled sidecar (Homebrew's build
+      # can't `rclone mount` on macOS). Referenced by bundle.externalBin.
+      - name: Fetch rclone sidecar
+        run: ./scripts/fetch-rclone.sh aarch64-apple-darwin
+
       # The shipped app version AND the latest.json manifest version both come
       # from tauri.conf.json. Stamp it from the git tag (v1.2.3 → 1.2.3) so each
       # release's manifest version is greater than installed apps — otherwise the

@@ -188,15 +188,17 @@ pub async fn kill_mount(state: &mut MountState) -> Result<()> {
     Ok(())
 }
 
-// GUI apps launched from Finder get a minimal PATH (/usr/bin:/bin:…) that does
-// NOT include Homebrew, so `which` alone misses a brew-installed rclone and the
-// spawn fails with "No such file or directory (os error 2)". Probe the known
-// install locations directly.
+// Resolution order matters twice over on macOS:
+//  - GUI apps launched from Finder get a minimal PATH (no /opt/homebrew/bin),
+//    so `which` alone misses installed binaries ("os error 2").
+//  - Homebrew's rclone is built WITHOUT FUSE-mount support (brew can't link
+//    the macFUSE cask) and hard-fails `rclone mount`. So the app's own BUNDLED
+//    official binary always wins, and /opt/homebrew is probed dead last.
 #[cfg(target_os = "macos")]
 const RCLONE_PATHS: &[&str] = &[
-    "/opt/homebrew/bin/rclone", // Apple Silicon Homebrew
-    "/usr/local/bin/rclone",    // Intel Homebrew / manual installs
+    "/usr/local/bin/rclone",    // official rclone.org installer location
     "/usr/bin/rclone",
+    "/opt/homebrew/bin/rclone", // brew build — mount-disabled, last resort
 ];
 #[cfg(target_os = "windows")]
 const RCLONE_PATHS: &[&str] = &["C:\\Program Files\\rclone\\rclone.exe"];
@@ -204,7 +206,19 @@ const RCLONE_PATHS: &[&str] = &["C:\\Program Files\\rclone\\rclone.exe"];
 const RCLONE_PATHS: &[&str] = &["/usr/local/bin/rclone", "/usr/bin/rclone"];
 
 pub fn resolve_rclone_binary(app_dir: &PathBuf) -> Result<String> {
-    // Bundled sidecar first, then known absolute paths, then PATH.
+    // 1) The sidecar Tauri bundles next to the app executable (externalBin
+    //    "binaries/rclone" → Contents/MacOS/rclone). Official build, always
+    //    mount-capable — present in every packaged install.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let sidecar = dir.join(if cfg!(windows) { "rclone.exe" } else { "rclone" });
+            if sidecar.exists() {
+                return Ok(sidecar.to_string_lossy().into_owned());
+            }
+        }
+    }
+    // 2) Dev runs: the staged sidecar in the repo (scripts/fetch-rclone.sh),
+    //    via the legacy config-dir slot.
     let bundled = app_dir.join("binaries").join(format!(
         "rclone-{}",
         std::env::consts::ARCH
@@ -212,6 +226,7 @@ pub fn resolve_rclone_binary(app_dir: &PathBuf) -> Result<String> {
     if bundled.exists() {
         return Ok(bundled.to_string_lossy().into_owned());
     }
+    // 3) System installs, then PATH.
     for p in RCLONE_PATHS {
         if std::path::Path::new(p).exists() {
             return Ok((*p).to_string());
@@ -219,5 +234,5 @@ pub fn resolve_rclone_binary(app_dir: &PathBuf) -> Result<String> {
     }
     which::which("rclone")
         .map(|p| p.to_string_lossy().into_owned())
-        .map_err(|_| anyhow::anyhow!("rclone isn’t installed. Open Terminal and run:  brew install rclone"))
+        .map_err(|_| anyhow::anyhow!("rclone isn’t available. Reinstall ARMRA Space (it ships with rclone built in), or install it from rclone.org/downloads."))
 }
