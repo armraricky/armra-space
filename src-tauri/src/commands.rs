@@ -213,7 +213,7 @@ async fn mount_current(state: &AppState) -> Result<MountStatusResponse, String> 
     };
     let mount_point = mount::mount_point_for(&subdir);
 
-    match mount::spawn_mount(&rclone_bin, &config_path, &remote_path, &mount_point, &cache_dir, read_only).await {
+    match mount::spawn_mount(&rclone_bin, &config_path, &remote_path, &mount_point, &cache_dir, read_only, &subdir).await {
         Ok(mut child) => {
             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
             // rclone runs in the foreground (--daemon=false), so if the mount

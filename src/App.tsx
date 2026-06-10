@@ -1,19 +1,23 @@
 import { useState, useEffect, useCallback } from "react";
 import { api } from "./lib/tauri";
 import type {
-  MountStatus, Session, Filespace, ActiveFilespace, CacheConfig, Update,
+  MountStatus, Session, Filespace, ActiveFilespace, CacheConfig, Update, PinnedFile,
 } from "./lib/tauri";
 import { LoginScreen } from "./components/LoginScreen";
 import { Settings } from "./components/Settings";
 import { FilespaceDetail } from "./components/FilespaceDetail";
+import { FileTree } from "./components/FileTree";
+import { PinsSidebar } from "./components/PinsSidebar";
 import "./App.css";
 
 type View = "filespace" | "settings";
+type DetailTab = "overview" | "files";
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [view, setView] = useState<View>("filespace");
+  const [tab, setTab] = useState<DetailTab>("overview");
 
   const [filespaces, setFilespaces] = useState<Filespace[]>([]);
   const [filespacesError, setFilespacesError] = useState<string | null>(null);
@@ -32,7 +36,7 @@ export default function App() {
   const [mountedId, setMountedId] = useState<string | null>(null);
 
   const [cacheConfig, setCacheConfig] = useState<CacheConfig | null>(null);
-  const [pinsCount, setPinsCount] = useState(0);
+  const [pins, setPins] = useState<PinnedFile[]>([]);
 
   const [update, setUpdate] = useState<Update | null>(null);
   const [updating, setUpdating] = useState<string | null>(null);
@@ -55,7 +59,12 @@ export default function App() {
   const refreshStatus = useCallback(() => {
     api.getMountStatus().then((m) => { setMountStatus(m.status); setMountPoint(m.mount_point); });
     api.getCacheConfig().then(setCacheConfig).catch(() => {});
-    api.listPins().then((p) => setPinsCount(p.length)).catch(() => {});
+    api.listPins().then(setPins).catch(() => {});
+  }, []);
+
+  const refreshPins = useCallback(() => {
+    api.listPins().then(setPins).catch(() => {});
+    api.getCacheConfig().then(setCacheConfig).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -89,6 +98,7 @@ export default function App() {
   const selectFilespace = async (fs: Filespace) => {
     setSelected(fs);
     setView("filespace");
+    setTab("overview");
     setMountError(null);
     setOpening(true);
     try {
@@ -166,18 +176,29 @@ export default function App() {
           ) : filespaces.length === 0 ? (
             <div className="fs-list-empty">No filespaces yet — ask an admin to grant you access in ARMRA Quest.</div>
           ) : (
-            filespaces.map((fs) => (
-              <button
-                key={fs.id}
-                className={`fs-item ${selected?.id === fs.id ? "active" : ""}`}
-                onClick={() => selectFilespace(fs)}
-                title={`${fs.bucket}/${fs.prefix}`}
-              >
-                <span className="fs-item-glyph">◉</span>
-                <span className="fs-item-name">{fs.name}</span>
-                {mountedId === fs.id && mountStatus === "mounted" && <span className="fs-item-dot on" title="mounted" />}
-              </button>
-            ))
+            filespaces.map((fs) => {
+              const isMounted = mountedId === fs.id && mountStatus === "mounted";
+              return (
+                <div
+                  key={fs.id}
+                  className={`fs-item ${selected?.id === fs.id ? "active" : ""}`}
+                  onClick={() => selectFilespace(fs)}
+                  title={`${fs.bucket}/${fs.prefix}`}
+                  role="button"
+                >
+                  <span className="fs-item-glyph">◉</span>
+                  <span className="fs-item-name">{fs.name}</span>
+                  {isMounted && (
+                    <button
+                      className="fs-eject"
+                      title="Disconnect (unmount)"
+                      onClick={(e) => { e.stopPropagation(); disconnect(); }}
+                    >⏏</button>
+                  )}
+                  {isMounted && <span className="fs-item-dot on" title="mounted" />}
+                </div>
+              );
+            })
           )}
         </nav>
 
@@ -201,21 +222,34 @@ export default function App() {
         {view === "settings" ? (
           <div className="detail-scroll"><Settings /></div>
         ) : selected ? (
-          <FilespaceDetail
-            filespace={selected}
-            active={active}
-            mounted={mountStatus === "mounted" && mountedId === selected.id}
-            mountPoint={mountPoint}
-            cache={cacheConfig}
-            pinsCount={pinsCount}
-            opening={opening}
-            busy={busy}
-            error={mountError}
-            onOpen={openInBrowser}
-            onDisconnect={disconnect}
-            onManageCache={() => setView("settings")}
-            onRevealCache={() => api.revealCacheDir()}
-          />
+          <>
+            <div className="detail-tabs">
+              <button className={`detail-tab ${tab === "overview" ? "active" : ""}`} onClick={() => setTab("overview")}>Overview</button>
+              <button className={`detail-tab ${tab === "files" ? "active" : ""}`} onClick={() => setTab("files")}>Files &amp; Pins</button>
+            </div>
+            {tab === "overview" ? (
+              <FilespaceDetail
+                filespace={selected}
+                active={active}
+                mounted={mountStatus === "mounted" && mountedId === selected.id}
+                mountPoint={mountPoint}
+                cache={cacheConfig}
+                pinsCount={pins.length}
+                opening={opening}
+                busy={busy}
+                error={mountError}
+                onOpen={openInBrowser}
+                onDisconnect={disconnect}
+                onManageCache={() => setView("settings")}
+                onRevealCache={() => api.revealCacheDir()}
+              />
+            ) : (
+              <div className="browse-layout">
+                <FileTree pins={pins} bucket={selected.name} onPinsChange={refreshPins} />
+                <PinsSidebar pins={pins} onPinsChange={refreshPins} onOpenFile={(p) => api.openInFinder(p)} />
+              </div>
+            )}
+          </>
         ) : (
           <div className="detail-empty">
             <img src="/armra-icon.svg" alt="" className="detail-empty-icon" />

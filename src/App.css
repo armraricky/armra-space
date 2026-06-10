@@ -87,6 +87,19 @@
 
 .app-credit { position: fixed; right: 14px; bottom: 9px; font-size: 10.5px; color: var(--text-dim); opacity: 0.6; pointer-events: none; user-select: none; }
 
+/* Eject button on a mounted sidebar item */
+.fs-eject { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; flex: none; }
+.fs-eject:hover { color: var(--accent); }
+
+/* Overview / Files tabs in the detail panel */
+.detail-tabs { display: flex; gap: 2px; padding: 12px 32px 0; border-bottom: 1px solid var(--border); flex: none; }
+.detail-tab { background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-dim); cursor: pointer; font-size: 13px; padding: 8px 12px; margin-bottom: -1px; }
+.detail-tab:hover { color: var(--text); }
+.detail-tab.active { color: var(--text-h); border-bottom-color: var(--accent); }
+
+/* Files & Pins browse page */
+.browse-layout { flex: 1; display: flex; min-height: 0; overflow: hidden; }
+
 .app-loading {
   display: flex;
   align-items: center;

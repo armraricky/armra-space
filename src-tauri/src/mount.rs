@@ -156,6 +156,7 @@ pub async fn spawn_mount(
     mount_point: &PathBuf,
     cache_dir: &PathBuf,
     read_only: bool,
+    volname: &str,
 ) -> Result<Child> {
     // macOS: mount point must exist but be empty
     std::fs::create_dir_all(mount_point)?;
@@ -197,6 +198,15 @@ pub async fn spawn_mount(
     if read_only {
         args.push("--read-only");
     }
+    // Name the mounted volume after the filespace (e.g. "Creative") instead of
+    // the bucket / "s3vault". --volname is macOS/Windows only on nfsmount.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    if !volname.is_empty() {
+        args.push("--volname");
+        args.push(volname);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = volname;
 
     let child = Command::new(rclone_bin)
         .args(&args)
