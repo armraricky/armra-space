@@ -13,11 +13,10 @@ auto-updates itself from GitHub Releases.
 
 ## End-user prerequisites (macOS)
 
-```bash
-brew install rclone
-brew install --cask macfuse      # required only for the Finder mount, not for browsing
-```
-Windows: [rclone](https://rclone.org/downloads/) + [WinFSP](https://winfsp.dev/rel/).
+**None.** rclone ships inside the app, and mounting uses macOS's built-in NFS
+client (`rclone nfsmount`) — no macFUSE, no system-extension approval, no
+reboot. The only first-run step is Gatekeeper: right-click the app → Open once
+(unsigned). Windows: [WinFSP](https://winfsp.dev/rel/) (classic mount path).
 
 ## Using the app
 1. Launch → **Sign in with your browser** (or a pairing code from `armra.quest/space/pair`).

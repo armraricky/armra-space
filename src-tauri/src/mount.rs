@@ -127,8 +127,18 @@ pub async fn spawn_mount(
 
     let remote = format!("s3vault:{}", remote_path);
 
+    // macOS: use rclone's NFS mount — it serves the remote over NFS on
+    // localhost and mounts it with the OS's BUILT-IN NFS client. No macFUSE,
+    // no kernel/system-extension approval, no reboot — the blocker that made
+    // FUSE mounts a non-starter for normal users. Same VFS flags apply.
+    // Windows keeps classic mount (WinFSP).
+    #[cfg(target_os = "macos")]
+    let mount_cmd = "nfsmount";
+    #[cfg(not(target_os = "macos"))]
+    let mount_cmd = "mount";
+
     let mut args: Vec<&str> = vec![
-        "mount",
+        mount_cmd,
         &remote,
         mount_point.to_str().unwrap(),
         "--config",

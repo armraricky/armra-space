@@ -236,14 +236,7 @@ export default function App() {
         />
       )}
 
-      {mountError && (
-        <div className="mount-error-banner">
-          {mountError}
-          {(mountError.includes("macFUSE") || mountError.toLowerCase().includes("fuse")) && (
-            <span> — Install <strong>macFUSE</strong> and <strong>rclone</strong> first.</span>
-          )}
-        </div>
-      )}
+      {mountError && <div className="mount-error-banner">{mountError}</div>}
 
       <main className="app-main">
         {view === "settings" ? (
