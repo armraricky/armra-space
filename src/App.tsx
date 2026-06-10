@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { api, onSyncProgress } from "./lib/tauri";
 import type {
-  MountStatus, Session, Filespace, ActiveFilespace, CacheConfig, Update, PinnedFile, SyncProgress,
+  MountStatus, Session, Filespace, ActiveFilespace, CacheConfig, Update, PinnedFile, SyncProgress, TransferStats,
 } from "./lib/tauri";
 import { LoginScreen } from "./components/LoginScreen";
 import { Settings } from "./components/Settings";
@@ -42,6 +42,7 @@ export default function App() {
   const [updating, setUpdating] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
   const [sync, setSync] = useState<SyncProgress | null>(null);
+  const [xfer, setXfer] = useState<TransferStats | null>(null);
 
   const loadFilespaces = useCallback(async () => {
     setRefreshing(true);
@@ -110,6 +111,19 @@ export default function App() {
     if (mountStatus !== "mounted") return;
     const t = setInterval(() => { api.refreshFiles().catch(() => {}); }, 15000);
     return () => clearInterval(t);
+  }, [mountStatus]);
+
+  // Poll live transfer activity on the mounted drive (uploads/downloads to S3)
+  // so we can show a moving indicator while bytes are in flight.
+  useEffect(() => {
+    if (mountStatus !== "mounted") { setXfer(null); return; }
+    let alive = true;
+    const tick = async () => {
+      try { const s = await api.mountTransferStats(); if (alive) setXfer(s); } catch { /* ignore */ }
+    };
+    tick();
+    const t = setInterval(tick, 1500);
+    return () => { alive = false; clearInterval(t); };
   }, [mountStatus]);
 
   // Auto-refresh STS creds ~5 min before expiry — only for the filespace that's
@@ -305,11 +319,33 @@ export default function App() {
           </div>
         )}
 
+        {/* Live cloud transfer activity (uploads/downloads through the drive). */}
+        <TransferIndicator xfer={xfer} />
+
         <div className="app-footer">
           {appVersion && <div className="app-version">v{appVersion}</div>}
           <div className="app-credit">Made by Ricky Mantilla</div>
         </div>
       </main>
+    </div>
+  );
+}
+
+function fmtSpeed(bps: number): string {
+  if (bps >= 1_048_576) return `${(bps / 1_048_576).toFixed(1)} MB/s`;
+  if (bps >= 1024) return `${(bps / 1024).toFixed(0)} KB/s`;
+  return `${Math.round(bps)} B/s`;
+}
+
+function TransferIndicator({ xfer }: { xfer: TransferStats | null }) {
+  if (!xfer || (xfer.active === 0 && xfer.uploading === 0)) return null;
+  const up = xfer.uploading > 0;
+  return (
+    <div className={`xfer-pill ${up ? "up" : "down"}`} title="Transferring files to/from the cloud">
+      <span className="xfer-spinner" aria-hidden />
+      <span className="xfer-arrow">{up ? "↑" : "↓"}</span>
+      <span className="xfer-label">{up ? "Uploading" : "Downloading"}</span>
+      {xfer.speed_bps > 0 && <span className="xfer-speed">{fmtSpeed(xfer.speed_bps)}</span>}
     </div>
   );
 }

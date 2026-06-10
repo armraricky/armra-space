@@ -195,6 +195,7 @@ pub fn run() {
             commands::open_in_finder,
             commands::reveal_mount_point,
             commands::refresh_files,
+            commands::mount_transfer_stats,
             commands::pick_folder,
             // ARMRA Quest auth + filespaces
             auth::begin_login,

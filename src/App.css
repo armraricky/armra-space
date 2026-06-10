@@ -100,6 +100,38 @@
 .pin-progress-global { position: fixed; left: 0; right: 0; bottom: 0; height: 3px; background: var(--bg4); z-index: 60; }
 .pin-progress-global-fill { height: 100%; background: var(--accent); transition: width 0.3s ease; box-shadow: 0 0 8px rgba(230,255,127,0.5); }
 
+/* Live cloud-transfer pill (bottom-right, floats above the footer) */
+.xfer-pill {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.xfer-pill .xfer-arrow { font-size: 13px; font-weight: 800; }
+.xfer-pill.up .xfer-arrow { color: #4fb0ff; }
+.xfer-pill.down .xfer-arrow { color: var(--accent); }
+.xfer-speed { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.xfer-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--bg4);
+  border-top-color: var(--text);
+  animation: xfer-spin 0.7s linear infinite;
+}
+@keyframes xfer-spin { to { transform: rotate(360deg); } }
+
 /* Eject button on a mounted sidebar item */
 .fs-eject { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; flex: none; }
 .fs-eject:hover { color: var(--accent); }

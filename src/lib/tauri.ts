@@ -56,6 +56,12 @@ export interface CacheConfig {
   used_mb: number;
 }
 
+export interface TransferStats {
+  active: number;    // files currently transferring (either direction)
+  uploading: number; // dirty cache items being pushed to S3
+  speed_bps: number; // aggregate bytes/sec
+}
+
 // ── ARMRA Quest ──────────────────────────────────────────────────────────────
 export interface Session {
   email: string;
@@ -107,6 +113,7 @@ export const api = {
   openInFinder: (path: string) => invoke<void>("open_in_finder", { path }),
   revealMountPoint: () => invoke<void>("reveal_mount_point"),
   refreshFiles: () => invoke<void>("refresh_files"),
+  mountTransferStats: () => invoke<TransferStats>("mount_transfer_stats"),
   getVersion: () => _getVersion(),
 
   // Auth (ARMRA Quest)

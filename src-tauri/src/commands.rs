@@ -721,6 +721,63 @@ pub async fn pick_folder(app: tauri::AppHandle, default_path: Option<String>) ->
     Ok(picked.and_then(|f| f.into_path().ok()).map(|p| p.to_string_lossy().into_owned()))
 }
 
+/// Live transfer activity on the mounted drive, read from rclone's rc API.
+/// `active` = files currently moving (either direction), `uploading` = dirty
+/// cache items being pushed to S3, `speed_bps` = aggregate bytes/sec. All zero
+/// when nothing is transferring (or not mounted).
+#[derive(serde::Serialize, Default, Clone)]
+pub struct TransferStats {
+    pub active: u32,
+    pub uploading: u32,
+    pub speed_bps: f64,
+}
+
+#[tauri::command]
+pub async fn mount_transfer_stats(state: State<'_, AppState>) -> Result<TransferStats, String> {
+    {
+        let ms = state.mount_state.lock().await;
+        if !matches!(ms.status, MountStatus::Mounted) {
+            return Ok(TransferStats::default());
+        }
+    }
+    let rclone_bin = mount::resolve_rclone_binary(&state.config_dir).map_err(|e| e.to_string())?;
+    let mut stats = TransferStats::default();
+
+    // core/stats → active transfers + aggregate speed (covers reads + writes).
+    if let Ok(out) = tokio::process::Command::new(&rclone_bin)
+        .args(["rc", "--rc-addr", "127.0.0.1:5572", "core/stats"])
+        .output()
+        .await
+    {
+        if out.status.success() {
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+                stats.speed_bps = v.get("speed").and_then(|x| x.as_f64()).unwrap_or(0.0);
+                stats.active = v.get("transferring").and_then(|x| x.as_array()).map(|a| a.len() as u32).unwrap_or(0);
+            }
+        }
+    }
+
+    // vfs/stats → uploads in progress/queued, so we can show an "uploading" state
+    // distinctly from "downloading" (reads).
+    if let Ok(out) = tokio::process::Command::new(&rclone_bin)
+        .args(["rc", "--rc-addr", "127.0.0.1:5572", "vfs/stats"])
+        .output()
+        .await
+    {
+        if out.status.success() {
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+                if let Some(dc) = v.get("diskCache") {
+                    let inprog = dc.get("uploadsInProgress").and_then(|x| x.as_u64()).unwrap_or(0);
+                    let queued = dc.get("uploadsQueued").and_then(|x| x.as_u64()).unwrap_or(0);
+                    stats.uploading = (inprog + queued) as u32;
+                }
+            }
+        }
+    }
+
+    Ok(stats)
+}
+
 #[tauri::command]
 pub async fn reveal_mount_point(state: State<'_, AppState>) -> Result<(), String> {
     let mp = state
