@@ -237,15 +237,13 @@ pub async fn spawn_mount(
         "--rc",
         "--rc-addr", "127.0.0.1:5572",
         "--rc-no-auth",
-        // Keep macOS/Windows filesystem junk out of the bucket entirely — rclone
-        // won't surface or write these on the mount.
-        "--exclude", ".DS_Store",
-        "--exclude", "._*",
-        "--exclude", ".Spotlight-V100/**",
-        "--exclude", ".Trashes/**",
-        "--exclude", ".fseventsd/**",
-        "--exclude", ".DocumentRevisions-V100/**",
-        "--exclude", ".TemporaryItems/**",
+        // NOTE: do NOT use --exclude here. On a writable mount, when Finder copies
+        // a file it also writes the AppleDouble sidecar (._name) and .DS_Store;
+        // if rclone is told to exclude those, the create fails and Finder aborts
+        // the entire copy with "error code -8062". We keep junk OUT another way:
+        //   • .DS_Store on network (NFS) mounts → DSDontWriteNetworkStores (above)
+        //   • AppleDouble on macFUSE mounts → the `noappledouble` option (below)
+        //   • anything that still lands → hidden in-app by is_junk_name() on list
         "--daemon=false",
         "--allow-non-empty",
         "--log-level", "ERROR",

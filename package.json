@@ -1,7 +1,7 @@
 {
   "name": "s3-vault",
   "private": true,
-  "version": "0.1.25",
+  "version": "0.1.26",
   "type": "module",
   "scripts": {
     "dev": "vite",
