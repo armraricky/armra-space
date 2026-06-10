@@ -7,6 +7,15 @@ function formatMb(mb: number): string {
   return `${mb.toFixed(0)} MB`;
 }
 
+// Quick-pick cache sizes (in MB). 0 = unlimited.
+const CACHE_PRESETS = [
+  { label: "5 GB", mb: 5120 },
+  { label: "25 GB", mb: 25600 },
+  { label: "50 GB", mb: 51200 },
+  { label: "100 GB", mb: 102400 },
+  { label: "Unlimited", mb: 0 },
+];
+
 export function Settings() {
   const [version, setVersion] = useState<string | null>(null);
   const versionClicks = useRef(0);
@@ -15,6 +24,7 @@ export function Settings() {
   const [cacheConfig, setCacheConfig] = useState<CacheConfig | null>(null);
   const [cachePath, setCachePath] = useState("");
   const [cacheMaxMb, setCacheMaxMb] = useState(0);
+  const [customLimit, setCustomLimit] = useState(false);
   const [cacheSaving, setCacheSaving] = useState(false);
   const [cacheError, setCacheError] = useState<string | null>(null);
   const [cacheSaved, setCacheSaved] = useState(false);
@@ -28,6 +38,8 @@ export function Settings() {
       setCacheConfig(c);
       setCachePath(c.path);
       setCacheMaxMb(c.max_mb);
+      // If the saved limit isn't one of the presets, it's a custom value.
+      setCustomLimit(!CACHE_PRESETS.some((p) => p.mb === c.max_mb));
     });
   }, []);
 
@@ -87,30 +99,55 @@ export function Settings() {
         <label>
           Cache Location
           <div className="input-row">
-            <input
-              value={cachePath}
-              onChange={(e) => setCachePath(e.target.value)}
-              placeholder="/path/to/cache"
-              className="input-grow"
-            />
+            <button
+              className="cache-folder-btn"
+              onClick={async () => {
+                const picked = await api.pickFolder(cachePath || undefined);
+                if (picked) setCachePath(picked);
+              }}
+              title="Choose a folder"
+            >
+              <span className="cache-folder-icon">📁</span>
+              <span className="cache-folder-path">{cachePath || "Choose a folder…"}</span>
+            </button>
             <button className="btn-ghost" onClick={() => api.revealCacheDir()} title="Open in Finder">↗</button>
           </div>
         </label>
 
         <label>
-          Cache Limit <span className="label-hint">0 = unlimited</span>
-          <div className="cache-limit-row">
-            <input
-              type="number"
-              min={0}
-              step={256}
-              value={cacheMaxMb}
-              onChange={(e) => setCacheMaxMb(Math.max(0, Number(e.target.value)))}
-              className="input-number"
-            />
-            <span className="input-unit">MB</span>
-            {cacheMaxMb >= 1024 && <span className="input-unit-hint">({(cacheMaxMb / 1024).toFixed(1)} GB)</span>}
+          Cache Limit
+          <div className="cache-preset-row">
+            {CACHE_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                className={`cache-preset ${!customLimit && cacheMaxMb === p.mb ? "on" : ""}`}
+                onClick={() => { setCustomLimit(false); setCacheMaxMb(p.mb); }}
+              >
+                {p.label}
+              </button>
+            ))}
+            <button
+              className={`cache-preset ${customLimit ? "on" : ""}`}
+              onClick={() => setCustomLimit(true)}
+            >
+              Custom
+            </button>
           </div>
+          {customLimit && (
+            <div className="cache-limit-row">
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={cacheMaxMb > 0 ? +(cacheMaxMb / 1024).toFixed(1) : ""}
+                onChange={(e) => setCacheMaxMb(Math.max(0, Math.round(Number(e.target.value) * 1024)))}
+                className="input-number"
+                placeholder="e.g. 30"
+                autoFocus
+              />
+              <span className="input-unit">GB</span>
+            </div>
+          )}
         </label>
 
         {cacheConfig !== null && (

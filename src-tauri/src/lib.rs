@@ -25,6 +25,7 @@ pub fn run() {
             }
         })
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -194,6 +195,7 @@ pub fn run() {
             commands::open_in_finder,
             commands::reveal_mount_point,
             commands::refresh_files,
+            commands::pick_folder,
             // ARMRA Quest auth + filespaces
             auth::begin_login,
             auth::current_session,
@@ -203,6 +205,21 @@ pub fn run() {
             commands::open_filespace,
             commands::get_active_filespace,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running ARMRA Space");
+        .build(tauri::generate_context!())
+        .expect("error while building ARMRA Space")
+        .run(|app_handle, event| {
+            // Auto-eject: when the app is actually quitting (tray Quit, ⌘Q,
+            // logout → exit), unmount any live filespace so we don't leave a
+            // dangling NFS mount the OS has to reap. Window-close just hides
+            // (handled above), so this only fires on a real exit.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let state = app_handle.state::<AppState>();
+                tauri::async_runtime::block_on(async {
+                    let mut ms = state.mount_state.lock().await;
+                    if matches!(ms.status, MountStatus::Mounted) {
+                        let _ = mount::kill_mount(&mut ms).await;
+                    }
+                });
+            }
+        });
 }

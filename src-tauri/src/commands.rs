@@ -705,6 +705,22 @@ pub async fn refresh_files(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Open a native folder picker and return the chosen path (None if cancelled).
+/// Used to choose the offline-cache location. Runs on a worker thread (async
+/// command), so the blocking dialog call is safe.
+#[tauri::command]
+pub async fn pick_folder(app: tauri::AppHandle, default_path: Option<String>) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut dlg = app.dialog().file().set_title("Choose cache folder");
+    if let Some(p) = default_path {
+        if !p.trim().is_empty() {
+            dlg = dlg.set_directory(&p);
+        }
+    }
+    let picked = dlg.blocking_pick_folder();
+    Ok(picked.and_then(|f| f.into_path().ok()).map(|p| p.to_string_lossy().into_owned()))
+}
+
 #[tauri::command]
 pub async fn reveal_mount_point(state: State<'_, AppState>) -> Result<(), String> {
     let mp = state

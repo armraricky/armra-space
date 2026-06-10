@@ -637,6 +637,59 @@ button { font-family: var(--sans); cursor: pointer; }
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-top: 8px;
+}
+
+/* Cache-location folder picker button */
+.cache-folder-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.cache-folder-btn:hover { border-color: var(--border-strong, var(--text-dim)); background: var(--bg3); }
+.cache-folder-icon { flex-shrink: 0; }
+.cache-folder-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl; /* keep the folder name visible when the path is long */
+  text-align: left;
+}
+
+/* Cache-limit presets */
+.cache-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.cache-preset {
+  padding: 6px 12px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cache-preset:hover { color: var(--text); border-color: var(--text-dim); }
+.cache-preset.on {
+  background: var(--text-h, var(--text));
+  border-color: var(--text-h, var(--text));
+  color: var(--bg);
 }
 .input-number {
   width: 100px;
