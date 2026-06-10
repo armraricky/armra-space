@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { api } from "./lib/tauri";
+import { api, onSyncProgress } from "./lib/tauri";
 import type {
   MountStatus, Session, Filespace, ActiveFilespace, CacheConfig, Update, PinnedFile,
 } from "./lib/tauri";
@@ -66,6 +66,14 @@ export default function App() {
     api.listPins().then(setPins).catch(() => {});
     api.getCacheConfig().then(setCacheConfig).catch(() => {});
   }, []);
+
+  // Reflect pin downloads as they finish (pending → cached).
+  useEffect(() => {
+    const un = onSyncProgress((p) => {
+      if (p.total > 0 && p.done >= p.total) setTimeout(() => refreshPins(), 400);
+    });
+    return () => { un.then((f) => f()); };
+  }, [refreshPins]);
 
   useEffect(() => {
     api.currentSession()
@@ -246,7 +254,12 @@ export default function App() {
             ) : (
               <div className="browse-layout">
                 <FileTree pins={pins} bucket={selected.name} onPinsChange={refreshPins} />
-                <PinsSidebar pins={pins} onPinsChange={refreshPins} onOpenFile={(p) => api.openInFinder(p)} />
+                <div className="pins-col">
+                  <button className="btn-ghost pins-sync-btn" onClick={() => { api.startSync().catch(() => {}); }} title="Download all pending pins for offline use">
+                    ⭳ Sync pins{pins.some((p) => !p.is_cached) ? ` (${pins.filter((p) => !p.is_cached).length} pending)` : ""}
+                  </button>
+                  <PinsSidebar pins={pins} onPinsChange={refreshPins} onOpenFile={(p) => api.openInFinder(p)} />
+                </div>
               </div>
             )}
           </>

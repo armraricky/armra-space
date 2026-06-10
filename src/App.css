@@ -851,3 +851,7 @@ button { font-family: var(--sans); cursor: pointer; }
   margin-left: 8px;
 }
 .fs-tag.warn { color: var(--yellow); border-color: rgba(212, 168, 67, 0.4); }
+
+/* Files & Pins — pins column with a Sync button */
+.pins-col { display: flex; flex-direction: column; min-width: 0; }
+.pins-sync-btn { margin: 10px 12px 0; white-space: nowrap; }

@@ -65,6 +65,8 @@ export function FileTree({ pins, bucket, onPinsChange }: Props) {
         await api.unpinFile(key);
       } else {
         await api.pinFile(key, entry.size);
+        // Kick off the download immediately so the pin doesn't sit "pending".
+        api.startSync().catch(() => {});
       }
       onPinsChange();
     } finally {
