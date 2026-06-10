@@ -72,6 +72,8 @@ struct StsResp {
     filespace_id: String,
     #[serde(default)]
     mode: Option<String>,
+    #[serde(default)]
+    accelerate: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -131,6 +133,7 @@ pub async fn load_s3_config(state: State<'_, AppState>) -> Result<Option<S3Confi
         endpoint: db::get_config(&conn, "endpoint").map_err(|e| e.to_string())?,
         prefix: db::get_config(&conn, "prefix").map_err(|e| e.to_string())?,
         session_token: None,
+        accelerate: false,
     };
     // Manual creds are not a filespace — clear any stale role so a later
     // mount's read-only decision can't inherit it.
@@ -178,6 +181,7 @@ async fn mount_current(state: &AppState) -> Result<MountStatusResponse, String> 
         &cfg.secret_key,
         cfg.session_token.as_deref(),
         cfg.endpoint.as_deref(),
+        cfg.accelerate,
     ) {
         Ok(p) => p,
         Err(e) => {
@@ -330,6 +334,7 @@ pub async fn open_filespace(
         endpoint: sts.endpoint.clone(),
         prefix: prefix_opt,
         session_token: sts.session_token.clone(),
+        accelerate: sts.accelerate.unwrap_or(false),
     };
     let active = ActiveFilespace {
         id: sts.filespace_id.clone(),
@@ -374,6 +379,10 @@ pub async fn get_mount_status(state: State<'_, AppState>) -> Result<MountStatusR
 
 // ── Files ──────────────────────────────────────────────────────────────────
 
+fn listing_key(cfg: &S3Config, path: &str) -> String {
+    format!("{}:{}|{}", cfg.bucket, cfg.prefix.as_deref().unwrap_or(""), path)
+}
+
 #[tauri::command]
 pub async fn list_files(
     state: State<'_, AppState>,
@@ -387,9 +396,31 @@ pub async fn list_files(
         .ok_or("No S3 config saved")?;
 
     let client = s3client::make_client(&cfg).await.map_err(|e| e.to_string())?;
-    s3client::list_objects(&client, &cfg, &path)
+    let entries = s3client::list_objects(&client, &cfg, &path)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Cache the listing so the browse tab can paint instantly next time.
+    if let Ok(conn) = db::open(&state.db_path) {
+        if let Ok(json) = serde_json::to_string(&entries) {
+            let _ = db::set_listing_cache(&conn, &listing_key(&cfg, &path), &json);
+        }
+    }
+    Ok(entries)
+}
+
+/// Instant cached listing for a path (last-known tree). The UI shows this, then
+/// calls list_files for the live refresh.
+#[tauri::command]
+pub async fn cached_listing(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<Option<Vec<S3Entry>>, String> {
+    let cfg = match state.s3_config.lock().unwrap().clone() { Some(c) => c, None => return Ok(None) };
+    let conn = db::open(&state.db_path).map_err(|e| e.to_string())?;
+    match db::get_listing_cache(&conn, &listing_key(&cfg, &path)).map_err(|e| e.to_string())? {
+        Some(json) => Ok(serde_json::from_str(&json).ok()),
+        None => Ok(None),
+    }
 }
 
 // ── Pins ───────────────────────────────────────────────────────────────────

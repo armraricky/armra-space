@@ -19,6 +19,9 @@ pub struct S3Config {
     // filespace (the normal path). None for long-lived manual keys.
     #[serde(default)]
     pub session_token: Option<String>,
+    // S3 Transfer Acceleration — when on, rclone uses the s3-accelerate endpoint.
+    #[serde(default)]
+    pub accelerate: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

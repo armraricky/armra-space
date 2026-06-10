@@ -69,6 +69,7 @@ pub fn write_rclone_config(
     secret_key: &str,
     session_token: Option<&str>,
     endpoint: Option<&str>,
+    accelerate: bool,
 ) -> Result<PathBuf> {
     std::fs::create_dir_all(config_dir)?;
     let config_path = config_dir.join("rclone.conf");
@@ -83,6 +84,8 @@ pub fn write_rclone_config(
     } else {
         String::new()
     };
+    // S3 Transfer Acceleration (AWS only) — rclone uses the s3-accelerate edge endpoint.
+    let accel_line = if accelerate && endpoint.is_none() { "use_accelerate_endpoint = true\n" } else { "" };
 
     let content = format!(
         "[s3vault]\n\
@@ -94,6 +97,7 @@ pub fn write_rclone_config(
          {session_line}\
          region = {region}\n\
          {endpoint_line}\
+         {accel_line}\
          no_check_bucket = true\n"
     );
 

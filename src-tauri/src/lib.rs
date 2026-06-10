@@ -103,6 +103,7 @@ pub fn run() {
             commands::unmount_bucket,
             commands::get_mount_status,
             commands::list_files,
+            commands::cached_listing,
             commands::pin_file,
             commands::unpin_file,
             commands::list_pins,

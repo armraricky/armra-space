@@ -24,14 +24,20 @@ export function FileTree({ pins, bucket, onPinsChange }: Props) {
   const pinnedKeys = new Set(pins.map((p) => p.s3_key));
 
   const load = useCallback(async (p: string) => {
-    setLoading(true);
+    setPath(p);
     setError(null);
+    // Paint the cached listing instantly (if any), then refresh live.
+    let hadCache = false;
+    try {
+      const cached = await api.cachedListing(p);
+      if (cached && cached.length) { setEntries(cached); hadCache = true; }
+    } catch { /* ignore */ }
+    if (!hadCache) { setEntries([]); setLoading(true); }
     try {
       const result = await api.listFiles(p);
       setEntries(result);
-      setPath(p);
     } catch (e) {
-      setError(String(e));
+      if (!hadCache) setError(String(e));
     } finally {
       setLoading(false);
     }

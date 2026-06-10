@@ -39,9 +39,32 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS config (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS listing_cache (
+            cache_key TEXT PRIMARY KEY,
+            json      TEXT NOT NULL,
+            cached_at INTEGER NOT NULL
         );",
     )?;
     Ok(())
+}
+
+/// Cache a directory listing (JSON of Vec<S3Entry>) so the browse tab can paint
+/// instantly from the last-known tree before the live S3 listing returns.
+pub fn set_listing_cache(conn: &Connection, key: &str, json: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO listing_cache (cache_key, json, cached_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(cache_key) DO UPDATE SET json = excluded.json, cached_at = excluded.cached_at",
+        params![key, json, Utc::now().timestamp_millis()],
+    )?;
+    Ok(())
+}
+
+/// Return a cached listing's JSON if present (ignoring age — the caller refreshes live).
+pub fn get_listing_cache(conn: &Connection, key: &str) -> Result<Option<String>> {
+    let mut stmt = conn.prepare("SELECT json FROM listing_cache WHERE cache_key = ?1")?;
+    let mut rows = stmt.query(params![key])?;
+    if let Some(row) = rows.next()? { Ok(Some(row.get(0)?)) } else { Ok(None) }
 }
 
 pub fn upsert_pin(conn: &Connection, pin: &PinnedFile) -> Result<()> {

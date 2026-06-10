@@ -90,6 +90,7 @@ export const api = {
   unmountBucket: () => invoke<void>("unmount_bucket"),
   getMountStatus: () => invoke<MountStatusResponse>("get_mount_status"),
   listFiles: (path: string) => invoke<S3Entry[]>("list_files", { path }),
+  cachedListing: (path: string) => invoke<S3Entry[] | null>("cached_listing", { path }),
   pinFile: (s3Key: string, size: number) =>
     invoke<PinnedFile>("pin_file", { s3Key, size }),
   unpinFile: (s3Key: string) => invoke<void>("unpin_file", { s3Key }),
