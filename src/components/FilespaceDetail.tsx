@@ -1,16 +1,9 @@
-import type { Filespace, ActiveFilespace, MountStatus, CacheConfig } from "../lib/tauri";
+import type { Filespace, ActiveFilespace, CacheConfig } from "../lib/tauri";
 
 function fmtMb(mb: number): string {
   if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
   return `${mb.toFixed(0)} MB`;
 }
-
-const STATUS: Record<MountStatus, { label: string; cls: string }> = {
-  mounted: { label: "Connected", cls: "ok" },
-  mounting: { label: "Connecting…", cls: "warn" },
-  unmounted: { label: "Not connected", cls: "" },
-  error: { label: "Error", cls: "err" },
-};
 
 const MODE_LABEL: Record<string, string> = {
   "assume-role": "Scoped (role)",
@@ -21,7 +14,7 @@ const MODE_LABEL: Record<string, string> = {
 interface Props {
   filespace: Filespace;
   active: ActiveFilespace | null;
-  mountStatus: MountStatus;
+  mounted: boolean; // is THIS filespace the one currently mounted
   mountPoint?: string;
   cache: CacheConfig | null;
   pinsCount: number;
@@ -35,11 +28,13 @@ interface Props {
 }
 
 export function FilespaceDetail({
-  filespace, active, mountStatus, mountPoint, cache, pinsCount,
+  filespace, active, mounted, mountPoint, cache, pinsCount,
   opening, busy, error, onOpen, onDisconnect, onManageCache, onRevealCache,
 }: Props) {
-  const mounted = mountStatus === "mounted";
-  const status = STATUS[mountStatus];
+  const working = busy || opening;
+  const status = working ? { label: "Connecting…", cls: "warn" }
+    : mounted ? { label: "Connected", cls: "ok" }
+    : { label: "Not connected", cls: "" };
   const isActive = active?.id === filespace.id;
   const usedMb = cache?.used_mb ?? 0;
   const limitMb = cache?.max_mb ?? 0;

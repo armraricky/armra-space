@@ -227,7 +227,7 @@ async fn mount_current(state: &AppState) -> Result<MountStatusResponse, String> 
                         let _ = err.read_to_string(&mut msg).await;
                     }
                     let msg = if msg.trim().is_empty() {
-                        "rclone exited before the mount was established (is macFUSE installed?)".to_string()
+                        "The mount helper exited before the drive was ready. Try again, or reinstall the latest ARMRA Space.".to_string()
                     } else {
                         msg.trim().to_string()
                     };

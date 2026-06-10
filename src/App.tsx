@@ -26,6 +26,10 @@ export default function App() {
   const [mountPoint, setMountPoint] = useState<string | undefined>();
   const [mountError, setMountError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Which filespace is ACTUALLY mounted — distinct from the one selected in the
+  // sidebar. Selecting a filespace loads its creds but doesn't mount it, so the
+  // mounted indicator must track this, not the selection.
+  const [mountedId, setMountedId] = useState<string | null>(null);
 
   const [cacheConfig, setCacheConfig] = useState<CacheConfig | null>(null);
   const [pinsCount, setPinsCount] = useState(0);
@@ -65,19 +69,22 @@ export default function App() {
     api.checkUpdate().then((u) => { if (u) setUpdate(u); }).catch(() => {});
   }, [loadFilespaces, refreshStatus]);
 
-  // Auto-refresh STS creds ~5 min before expiry (skip static / non-expiring).
+  // Auto-refresh STS creds ~5 min before expiry — only for the filespace that's
+  // actually mounted (skip static / non-expiring, and skip when the selected
+  // filespace isn't the mounted one).
   useEffect(() => {
-    if (!active?.expiration) return;
+    if (!active?.expiration || active.id !== mountedId) return;
     const delay = Math.max(30_000, active.expiration - Date.now() - 5 * 60 * 1000);
     const t = setTimeout(async () => {
       try {
         const a = await api.openFilespace(active.id);
         setActive(a);
-        if (mountStatus === "mounted") { const r = await api.mountBucket(); setMountStatus(r.status); setMountPoint(r.mount_point); }
+        const r = await api.mountBucket();
+        setMountStatus(r.status); setMountPoint(r.mount_point);
       } catch { /* surfaced on next action */ }
     }, delay);
     return () => clearTimeout(t);
-  }, [active, mountStatus]);
+  }, [active, mountedId]);
 
   const selectFilespace = async (fs: Filespace) => {
     setSelected(fs);
@@ -100,10 +107,12 @@ export default function App() {
   const openInBrowser = async () => {
     setBusy(true); setMountError(null);
     try {
-      if (mountStatus !== "mounted") {
+      // Mount this filespace if it isn't the currently-mounted one.
+      if (!(mountStatus === "mounted" && mountedId === selected?.id)) {
         const r = await api.mountBucket();
         setMountStatus(r.status); setMountPoint(r.mount_point);
         if (r.status !== "mounted") return;
+        setMountedId(selected?.id ?? null);
       }
       await api.revealMountPoint();
     } catch (e) {
@@ -113,7 +122,7 @@ export default function App() {
 
   const disconnect = async () => {
     setBusy(true);
-    try { await api.unmountBucket(); setMountStatus("unmounted"); setMountPoint(undefined); }
+    try { await api.unmountBucket(); setMountStatus("unmounted"); setMountPoint(undefined); setMountedId(null); }
     catch (e) { setMountError(String(e)); }
     finally { setBusy(false); }
   };
@@ -122,7 +131,7 @@ export default function App() {
     if (mountStatus === "mounted") { try { await api.unmountBucket(); } catch { /* ignore */ } }
     await api.logout();
     setSession(null); setSelected(null); setActive(null); setFilespaces([]);
-    setMountStatus("unmounted"); setMountPoint(undefined); setView("filespace");
+    setMountStatus("unmounted"); setMountPoint(undefined); setMountedId(null); setView("filespace");
   };
 
   const installUpdate = async () => {
@@ -166,7 +175,7 @@ export default function App() {
               >
                 <span className="fs-item-glyph">◉</span>
                 <span className="fs-item-name">{fs.name}</span>
-                {active?.id === fs.id && mountStatus === "mounted" && <span className="fs-item-dot on" title="mounted" />}
+                {mountedId === fs.id && mountStatus === "mounted" && <span className="fs-item-dot on" title="mounted" />}
               </button>
             ))
           )}
@@ -195,7 +204,7 @@ export default function App() {
           <FilespaceDetail
             filespace={selected}
             active={active}
-            mountStatus={mountStatus}
+            mounted={mountStatus === "mounted" && mountedId === selected.id}
             mountPoint={mountPoint}
             cache={cacheConfig}
             pinsCount={pinsCount}

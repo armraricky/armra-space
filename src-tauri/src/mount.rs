@@ -215,10 +215,20 @@ pub async fn kill_mount(state: &mut MountState) -> Result<()> {
 
     #[cfg(target_os = "macos")]
     if let Some(ref mp) = state.mount_point {
-        let _ = tokio::process::Command::new("diskutil")
-            .args(["unmount", "force", mp.to_str().unwrap()])
+        // Plain `umount` is user-level for an NFS mount the user created — no
+        // admin/password prompt. (diskutil unmount can escalate.) Killing the
+        // rclone child above already stops its NFS server; this detaches the
+        // mount point. `-f` only if a clean umount fails.
+        let out = tokio::process::Command::new("umount")
+            .arg(mp.to_str().unwrap())
             .output()
             .await;
+        if out.map(|o| !o.status.success()).unwrap_or(true) {
+            let _ = tokio::process::Command::new("umount")
+                .args(["-f", mp.to_str().unwrap()])
+                .output()
+                .await;
+        }
     }
 
     #[cfg(target_os = "windows")]
