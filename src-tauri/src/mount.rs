@@ -167,6 +167,16 @@ pub async fn spawn_mount(
     std::fs::create_dir_all(mount_point)?;
     std::fs::create_dir_all(cache_dir)?;
 
+    // Stop macOS from writing .DS_Store onto network volumes (belt-and-suspenders
+    // with the rclone --exclude filters below). Best-effort; takes effect for new
+    // mounts. The user may need to relaunch Finder for it to fully apply.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("defaults")
+            .args(["write", "com.apple.desktopservices", "DSDontWriteNetworkStores", "-bool", "true"])
+            .status();
+    }
+
     let remote = format!("s3vault:{}", remote_path);
     // Cap the read cache to the user's configured limit (0 = unlimited → off).
     let cache_max = if cache_max_mb > 0 { format!("{}M", cache_max_mb) } else { "off".to_string() };
@@ -217,6 +227,15 @@ pub async fn spawn_mount(
         "--rc",
         "--rc-addr", "127.0.0.1:5572",
         "--rc-no-auth",
+        // Keep macOS/Windows filesystem junk out of the bucket entirely — rclone
+        // won't surface or write these on the mount.
+        "--exclude", ".DS_Store",
+        "--exclude", "._*",
+        "--exclude", ".Spotlight-V100/**",
+        "--exclude", ".Trashes/**",
+        "--exclude", ".fseventsd/**",
+        "--exclude", ".DocumentRevisions-V100/**",
+        "--exclude", ".TemporaryItems/**",
         "--daemon=false",
         "--allow-non-empty",
         "--log-level", "ERROR",
