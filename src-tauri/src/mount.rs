@@ -101,11 +101,47 @@ pub fn write_rclone_config(
     Ok(config_path)
 }
 
-pub fn default_mount_point() -> PathBuf {
+/// The branded home folder. macOS won't honor a custom icon on an NFS volume
+/// root, so instead this is a real local folder we brand (green-Q) and mount
+/// filespaces INSIDE — that's the entry point users see in Finder/the sidebar.
+pub fn brand_base_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join("ARMRA Space")
 }
+
+fn sanitize_name(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| if c == '/' || c == ':' { '-' } else { c })
+        .collect();
+    let s = s.trim().trim_matches('.').to_string();
+    if s.is_empty() { "Filespace".to_string() } else { s }
+}
+
+/// Mount point for a filespace: <branded base>/<Filespace Name>.
+pub fn mount_point_for(name: &str) -> PathBuf {
+    brand_base_dir().join(sanitize_name(name))
+}
+
+/// Apply the bundled brand icon to a folder (macOS custom-icon bit via
+/// NSWorkspace). Best-effort — never fails the mount.
+#[cfg(target_os = "macos")]
+pub fn set_folder_icon(folder: &std::path::Path, icns: &std::path::Path) {
+    if !icns.exists() { return; }
+    let script = format!(
+        "use framework \"AppKit\"\n\
+         set img to current application's NSImage's alloc()'s initWithContentsOfFile:\"{}\"\n\
+         current application's NSWorkspace's sharedWorkspace()'s setIcon:img forFile:\"{}\" options:0",
+        icns.to_string_lossy().replace('"', "\\\""),
+        folder.to_string_lossy().replace('"', "\\\""),
+    );
+    let _ = std::process::Command::new("osascript")
+        .args(["-l", "AppleScript", "-e", &script])
+        .output();
+}
+#[cfg(not(target_os = "macos"))]
+pub fn set_folder_icon(_folder: &std::path::Path, _icns: &std::path::Path) {}
 
 /// Spawn rclone mount. Returns the child process.
 ///

@@ -190,7 +190,6 @@ async fn mount_current(state: &AppState) -> Result<MountStatusResponse, String> 
     };
 
     let remote_path = remote_path_for(&cfg);
-    let mount_point = mount::default_mount_point();
     let rclone_bin = match mount::resolve_rclone_binary(&state.config_dir) {
         Ok(b) => b,
         Err(e) => {
@@ -201,15 +200,18 @@ async fn mount_current(state: &AppState) -> Result<MountStatusResponse, String> 
         }
     };
     let cache_dir = state.cache_dir.lock().unwrap().clone();
-    // Viewers mount read-only — the client-side enforcement layer, which is
-    // the only write guard in static-credential mode.
-    let read_only = state
-        .active_filespace
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|a| a.role == "viewer")
-        .unwrap_or(false);
+    // One lock: the active filespace gives both the mount subfolder name (so
+    // the drive mounts INSIDE the branded ~/ARMRA Space folder, named by
+    // filespace) and the role (viewers mount read-only — the only write guard
+    // in static-credential mode).
+    let (subdir, read_only) = {
+        let af = state.active_filespace.lock().unwrap();
+        match af.as_ref() {
+            Some(a) => (a.name.clone(), a.role == "viewer"),
+            None => (cfg.bucket.clone(), false), // legacy manual path
+        }
+    };
+    let mount_point = mount::mount_point_for(&subdir);
 
     match mount::spawn_mount(&rclone_bin, &config_path, &remote_path, &mount_point, &cache_dir, read_only).await {
         Ok(mut child) => {

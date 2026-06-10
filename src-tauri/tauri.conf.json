@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ARMRA Space",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "identifier": "com.armra.space",
   "build": {
     "frontendDist": "../dist",
@@ -79,7 +79,8 @@
       }
     },
     "resources": [
-      "../install-deps.command"
+      "../install-deps.command",
+      "icons/icon.icns"
     ]
   }
 }

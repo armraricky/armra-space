@@ -85,6 +85,15 @@ pub fn run() {
             // macOS registers via the bundle Info.plist from tauri.conf.json).
             let _ = app.deep_link().register_all();
 
+            // Create + brand the ~/ARMRA Space folder (green-Q icon). Filespaces
+            // mount INSIDE it — macOS won't icon an NFS volume root, so this
+            // branded local folder is the entry point users see in Finder.
+            let base = mount::brand_base_dir();
+            let _ = std::fs::create_dir_all(&base);
+            if let Ok(icns) = app.path().resolve("icons/icon.icns", tauri::path::BaseDirectory::Resource) {
+                mount::set_folder_icon(&base, &icns);
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
