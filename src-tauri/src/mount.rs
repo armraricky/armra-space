@@ -195,6 +195,20 @@ pub async fn spawn_mount(
     #[cfg(not(target_os = "macos"))]
     let mount_cmd = "mount";
 
+    // macFUSE volume icon: drop the bundled ARMRA icon next to the config and
+    // point macFUSE's `volicon=` option at it so the mounted drive shows the
+    // brand icon in Finder instead of the generic disk. Best-effort; macFUSE-only.
+    #[cfg(target_os = "macos")]
+    let volicon_opt: Option<String> = if use_macfuse {
+        config_path.parent().and_then(|dir| {
+            let path = dir.join("ARMRA Space.icns");
+            std::fs::write(&path, include_bytes!("../icons/icon.icns")).ok()?;
+            Some(format!("volicon={}", path.to_string_lossy()))
+        })
+    } else {
+        None
+    };
+
     let mut args: Vec<&str> = vec![
         mount_cmd,
         &remote,
@@ -269,6 +283,10 @@ pub async fn spawn_mount(
         args.push("local");
         args.push("--option");
         args.push("noappledouble");
+        if let Some(ref vi) = volicon_opt {
+            args.push("--option");
+            args.push(vi);
+        }
     }
 
     let child = Command::new(rclone_bin)
