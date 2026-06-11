@@ -203,6 +203,7 @@ pub fn run() {
             commands::reveal_mount_point,
             commands::refresh_files,
             commands::mount_transfer_stats,
+            commands::filespace_storage_used,
             commands::macfuse_available,
             commands::open_url,
             commands::pick_folder,

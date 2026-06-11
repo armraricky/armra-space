@@ -71,6 +71,24 @@ export interface TransferStats {
   speed_bps: number; // aggregate bytes/sec
 }
 
+export interface FilespaceActivity {
+  id: string;
+  name: string;
+  active: number;
+  uploading: number;
+  speed_bps: number;
+}
+
+export interface MountStats {
+  total: TransferStats;        // aggregate across all mounts (global indicator)
+  per: FilespaceActivity[];    // per-filespace breakdown (sidebar badges)
+}
+
+export interface StorageInfo {
+  bytes: number;   // total bytes stored in the filespace
+  count: number;   // object count
+}
+
 // ── ARMRA Quest ──────────────────────────────────────────────────────────────
 export interface Session {
   email: string;
@@ -126,7 +144,8 @@ export const api = {
   openInFinder: (path: string) => invoke<void>("open_in_finder", { path }),
   revealMountPoint: () => invoke<void>("reveal_mount_point"),
   refreshFiles: () => invoke<void>("refresh_files"),
-  mountTransferStats: () => invoke<TransferStats>("mount_transfer_stats"),
+  mountTransferStats: () => invoke<MountStats>("mount_transfer_stats"),
+  filespaceStorageUsed: (filespaceId: string) => invoke<StorageInfo>("filespace_storage_used", { filespaceId }),
   macfuseAvailable: () => invoke<boolean>("macfuse_available"),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   getVersion: () => _getVersion(),

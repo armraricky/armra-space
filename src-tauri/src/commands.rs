@@ -842,53 +842,127 @@ pub struct TransferStats {
     pub speed_bps: f64,
 }
 
+/// Live activity for a single mounted filespace.
+#[derive(serde::Serialize, Clone)]
+pub struct FilespaceActivity {
+    pub id: String,
+    pub name: String,
+    pub active: u32,
+    pub uploading: u32,
+    pub speed_bps: f64,
+}
+
+/// What `mount_transfer_stats` returns: an aggregate (for the global indicator)
+/// plus a per-filespace breakdown (for badges next to each filespace).
+#[derive(serde::Serialize, Default, Clone)]
+pub struct MountStats {
+    pub total: TransferStats,
+    pub per: Vec<FilespaceActivity>,
+}
+
+/// Read live transfer activity from each mounted filespace's rclone rc API and
+/// return both the per-filespace breakdown and the aggregate. `active` = files
+/// currently moving (either direction), `uploading` = dirty cache items being
+/// pushed to S3, `speed_bps` = bytes/sec. All zero when nothing is in flight.
 #[tauri::command]
-pub async fn mount_transfer_stats(state: State<'_, AppState>) -> Result<TransferStats, String> {
-    // Aggregate live activity across ALL mounted filespaces (each its own port).
-    let ports: Vec<u16> = {
+pub async fn mount_transfer_stats(state: State<'_, AppState>) -> Result<MountStats, String> {
+    let mounted: Vec<(String, String, u16)> = {
         let mounts = state.mounts.lock().await;
-        mounts.values().filter(|m| matches!(m.status, MountStatus::Mounted)).map(|m| m.rc_port).collect()
+        mounts
+            .iter()
+            .filter(|(_, m)| matches!(m.status, MountStatus::Mounted))
+            .map(|(id, m)| (id.clone(), m.name.clone(), m.rc_port))
+            .collect()
     };
-    if ports.is_empty() {
-        return Ok(TransferStats::default());
+    if mounted.is_empty() {
+        return Ok(MountStats::default());
     }
     let rclone_bin = mount::resolve_rclone_binary(&state.config_dir).map_err(|e| e.to_string())?;
-    let mut stats = TransferStats::default();
+    let mut out = MountStats::default();
 
-    for port in ports {
+    for (id, name, port) in mounted {
+        let mut fa = FilespaceActivity { id, name, active: 0, uploading: 0, speed_bps: 0.0 };
         let addr = format!("127.0.0.1:{}", port);
         // core/stats → active transfers + aggregate speed (reads + writes).
-        if let Ok(out) = tokio::process::Command::new(&rclone_bin)
+        if let Ok(o) = tokio::process::Command::new(&rclone_bin)
             .args(["rc", "--rc-addr", &addr, "core/stats"])
             .output()
             .await
         {
-            if out.status.success() {
-                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
-                    stats.speed_bps += v.get("speed").and_then(|x| x.as_f64()).unwrap_or(0.0);
-                    stats.active += v.get("transferring").and_then(|x| x.as_array()).map(|a| a.len() as u32).unwrap_or(0);
+            if o.status.success() {
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                    fa.speed_bps = v.get("speed").and_then(|x| x.as_f64()).unwrap_or(0.0);
+                    fa.active = v.get("transferring").and_then(|x| x.as_array()).map(|a| a.len() as u32).unwrap_or(0);
                 }
             }
         }
         // vfs/stats → uploads in progress/queued (distinguish upload vs download).
-        if let Ok(out) = tokio::process::Command::new(&rclone_bin)
+        if let Ok(o) = tokio::process::Command::new(&rclone_bin)
             .args(["rc", "--rc-addr", &addr, "vfs/stats"])
             .output()
             .await
         {
-            if out.status.success() {
-                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+            if o.status.success() {
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
                     if let Some(dc) = v.get("diskCache") {
                         let inprog = dc.get("uploadsInProgress").and_then(|x| x.as_u64()).unwrap_or(0);
                         let queued = dc.get("uploadsQueued").and_then(|x| x.as_u64()).unwrap_or(0);
-                        stats.uploading += (inprog + queued) as u32;
+                        fa.uploading = (inprog + queued) as u32;
                     }
                 }
             }
         }
+        out.total.active += fa.active;
+        out.total.uploading += fa.uploading;
+        out.total.speed_bps += fa.speed_bps;
+        out.per.push(fa);
     }
 
-    Ok(stats)
+    Ok(out)
+}
+
+/// Total bytes (and object count) stored in a filespace, computed via rclone's
+/// `operations/size` over the remote. Requires the filespace to be mounted (we
+/// reuse its running rc instance + its scoped credentials). Traverses the
+/// bucket/prefix, so it can take a moment on large filespaces — call on demand.
+#[derive(serde::Serialize, Clone)]
+pub struct StorageInfo {
+    pub bytes: u64,
+    pub count: u64,
+}
+
+#[tauri::command]
+pub async fn filespace_storage_used(state: State<'_, AppState>, filespace_id: String) -> Result<StorageInfo, String> {
+    let port = {
+        let mounts = state.mounts.lock().await;
+        mounts
+            .get(&filespace_id)
+            .filter(|m| matches!(m.status, MountStatus::Mounted))
+            .map(|m| m.rc_port)
+            .ok_or("Connect this filespace to see its storage total.")?
+    };
+    // std::sync::Mutex — clone the path out so the guard drops before we await.
+    let remote_path = {
+        let cfgs = state.fs_configs.lock().unwrap();
+        cfgs.get(&filespace_id).map(|(_, a)| a.remote_path.clone())
+            .ok_or("Filespace credentials aren’t loaded yet.")?
+    };
+    let rclone_bin = mount::resolve_rclone_binary(&state.config_dir).map_err(|e| e.to_string())?;
+    let addr = format!("127.0.0.1:{}", port);
+    let fs_arg = format!("fs=s3vault:{}", remote_path);
+    let out = tokio::process::Command::new(&rclone_bin)
+        .args(["rc", "--rc-addr", &addr, "operations/size", &fs_arg, "remote="])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!("rclone size failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
+    Ok(StorageInfo {
+        bytes: v.get("bytes").and_then(|x| x.as_u64()).unwrap_or(0),
+        count: v.get("count").and_then(|x| x.as_u64()).unwrap_or(0),
+    })
 }
 
 #[tauri::command]

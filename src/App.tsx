@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { api, onSyncProgress } from "./lib/tauri";
 import type {
-  MountInfo, Session, Filespace, ActiveFilespace, CacheConfig, Update, PinnedFile, SyncProgress, TransferStats,
+  MountInfo, Session, Filespace, ActiveFilespace, CacheConfig, Update, PinnedFile, SyncProgress, MountStats,
 } from "./lib/tauri";
 import { LoginScreen } from "./components/LoginScreen";
 import { Settings } from "./components/Settings";
@@ -41,7 +41,7 @@ export default function App() {
   const [updating, setUpdating] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
   const [sync, setSync] = useState<SyncProgress | null>(null);
-  const [xfer, setXfer] = useState<TransferStats | null>(null);
+  const [xfer, setXfer] = useState<MountStats | null>(null);
 
   const loadFilespaces = useCallback(async () => {
     setRefreshing(true);
@@ -231,6 +231,9 @@ export default function App() {
           ) : (
             filespaces.map((fs) => {
               const isMounted = !!mountOf(fs.id);
+              const act = xfer?.per.find((p) => p.id === fs.id);
+              const moving = !!act && (act.active > 0 || act.uploading > 0);
+              const up = !!act && act.uploading > 0;
               return (
                 <div
                   key={fs.id}
@@ -241,6 +244,14 @@ export default function App() {
                 >
                   <span className="fs-item-glyph">◉</span>
                   <span className="fs-item-name">{fs.name}</span>
+                  {moving && (
+                    <span
+                      title={`${up ? "Uploading" : "Downloading"}${act.speed_bps > 0 ? ` · ${fmtSpeed(act.speed_bps)}` : ""}`}
+                      style={{ marginLeft: "auto", fontSize: 10.5, fontWeight: 700, color: "var(--accent)", whiteSpace: "nowrap" }}
+                    >
+                      {up ? "↑" : "↓"}{act.speed_bps > 0 ? ` ${fmtSpeed(act.speed_bps)}` : ""}
+                    </span>
+                  )}
                   {isMounted && (
                     <button
                       className="fs-eject"
@@ -342,15 +353,16 @@ function fmtSpeed(bps: number): string {
   return `${Math.round(bps)} B/s`;
 }
 
-function TransferIndicator({ xfer }: { xfer: TransferStats | null }) {
-  if (!xfer || (xfer.active === 0 && xfer.uploading === 0)) return null;
-  const up = xfer.uploading > 0;
+function TransferIndicator({ xfer }: { xfer: MountStats | null }) {
+  const t = xfer?.total;
+  if (!t || (t.active === 0 && t.uploading === 0)) return null;
+  const up = t.uploading > 0;
   return (
     <div className={`xfer-pill ${up ? "up" : "down"}`} title="Transferring files to/from the cloud">
       <span className="xfer-spinner" aria-hidden />
       <span className="xfer-arrow">{up ? "↑" : "↓"}</span>
       <span className="xfer-label">{up ? "Uploading" : "Downloading"}</span>
-      {xfer.speed_bps > 0 && <span className="xfer-speed">{fmtSpeed(xfer.speed_bps)}</span>}
+      {t.speed_bps > 0 && <span className="xfer-speed">{fmtSpeed(t.speed_bps)}</span>}
     </div>
   );
 }

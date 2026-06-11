@@ -1,10 +1,17 @@
 import { useState, useEffect } from "react";
 import { api } from "../lib/tauri";
-import type { Filespace, ActiveFilespace, CacheConfig } from "../lib/tauri";
+import type { Filespace, ActiveFilespace, CacheConfig, StorageInfo } from "../lib/tauri";
 
 function fmtMb(mb: number): string {
   if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
   return `${mb.toFixed(0)} MB`;
+}
+
+function fmtBytes(b: number): string {
+  if (b >= 1e9) return `${(b / 1e9).toFixed(2)} GB`;
+  if (b >= 1e6) return `${(b / 1e6).toFixed(1)} MB`;
+  if (b >= 1e3) return `${(b / 1e3).toFixed(0)} KB`;
+  return `${b} B`;
 }
 
 const MODE_LABEL: Record<string, string> = {
@@ -36,6 +43,22 @@ export function FilespaceDetail({
 }: Props) {
   const [macfuse, setMacfuse] = useState<boolean | null>(null);
   useEffect(() => { api.macfuseAvailable().then(setMacfuse).catch(() => {}); }, []);
+
+  // Total bytes stored in this filespace (via rclone size on its mount). Slow on
+  // big buckets, so fetch once when connected + offer a manual recalculate.
+  const [storage, setStorage] = useState<StorageInfo | null>(null);
+  const [sizing, setSizing] = useState(false);
+  async function loadStorage() {
+    setSizing(true);
+    try { setStorage(await api.filespaceStorageUsed(filespace.id)); }
+    catch { setStorage(null); }
+    finally { setSizing(false); }
+  }
+  useEffect(() => {
+    setStorage(null);
+    if (mounted) loadStorage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted, filespace.id]);
 
   const working = busy || opening;
   const status = working ? { label: "Connecting…", cls: "warn" }
@@ -89,6 +112,22 @@ export function FilespaceDetail({
             <div><span className="fs-k">Region</span><span className="fs-v">{filespace.region || "—"}</span></div>
             <div><span className="fs-k">Bucket</span><span className="fs-v mono">{filespace.bucket}</span></div>
             <div><span className="fs-k">Folder (prefix)</span><span className="fs-v mono">{filespace.prefix}</span></div>
+            <div>
+              <span className="fs-k">Total stored</span>
+              <span className="fs-v" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                {!mounted ? "Connect to view"
+                  : sizing ? "Calculating…"
+                  : storage ? `${fmtBytes(storage.bytes)} · ${storage.count.toLocaleString()} files`
+                  : "—"}
+                {mounted && !sizing && (
+                  <button
+                    onClick={loadStorage}
+                    title="Recalculate"
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--accent)", fontSize: 13, padding: 0, lineHeight: 1 }}
+                  >↻</button>
+                )}
+              </span>
+            </div>
           </div>
         </section>
 
