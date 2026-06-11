@@ -46,15 +46,15 @@ mkdir -p "$DEST_DIR"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-echo "Cloning rclone $RCLONE_VERSION…"
-git clone --depth 1 --branch "$RCLONE_VERSION" https://github.com/rclone/rclone.git "$TMP/rclone" 2>&1 | tail -1
+echo "Cloning rclone ${RCLONE_VERSION}..."
+git clone --depth 1 --branch "${RCLONE_VERSION}" https://github.com/rclone/rclone.git "$TMP/rclone" 2>&1 | tail -1
 
-echo "Applying xattr patch…"
+echo "Applying xattr patch..."
 git -C "$TMP/rclone" apply "$PATCH"
 
 # cgofuse's CFLAGS hard-code -I/usr/local/include/fuse; put the vendored headers
 # there so the build finds them without a macFUSE install.
-echo "Staging FUSE headers…"
+echo "Staging FUSE headers..."
 if mkdir -p /usr/local/include/fuse 2>/dev/null && [ -w /usr/local/include/fuse ]; then
   cp "$HEADERS"/*.h /usr/local/include/fuse/
 else
@@ -62,8 +62,12 @@ else
   sudo cp "$HEADERS"/*.h /usr/local/include/fuse/
 fi
 
-echo "Building rclone (cmount, $GOARCH)…"
-( cd "$TMP/rclone" && CGO_ENABLED=1 GOARCH="$GOARCH" go build -tags cmount -o "$DEST" . )
+echo "Building rclone (cmount, ${GOARCH})..."
+( cd "$TMP/rclone" && CGO_ENABLED=1 GOARCH="${GOARCH}" go build -tags cmount -o "$DEST" . )
 chmod +x "$DEST"
+
+# Hard guard: never let the step pass without actually producing the sidecar
+# (a silent miss here surfaces later as tauri "resource path ... doesn't exist").
+[ -x "$DEST" ] || { echo "ERROR: rclone build did not produce $DEST" >&2; exit 1; }
 echo "$WANT" > "$STAMP"
-echo "✓ Staged patched $DEST ($("$DEST" version | head -1))"
+echo "OK: staged patched $DEST ($("$DEST" version | head -1))"
