@@ -284,7 +284,7 @@ export default function App() {
         )}
 
         {view === "settings" ? (
-          <div className="detail-scroll"><Settings /></div>
+          <Settings />
         ) : selected ? (
           <>
             <div className="detail-tabs">
