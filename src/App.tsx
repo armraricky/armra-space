@@ -211,7 +211,7 @@ export default function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-logo">
-          <img src="/armra-icon.svg" alt="ARMRA" className="armra-icon" />
+          <img src="/armra-icon.png" alt="ARMRA" className="armra-icon" />
           <span className="app-wordmark">ARMRA</span>
           <span className="app-product">Space</span>
         </div>
@@ -312,7 +312,7 @@ export default function App() {
           </>
         ) : (
           <div className="detail-empty">
-            <img src="/armra-icon.svg" alt="" className="detail-empty-icon" />
+            <img src="/armra-icon.png" alt="" className="detail-empty-icon" />
             <p>Select a filespace to connect it.</p>
           </div>
         )}

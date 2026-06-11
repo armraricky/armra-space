@@ -54,7 +54,7 @@ export function LoginScreen({ onAuthed }: { onAuthed: (s: Session) => void }) {
     <div className="login-screen">
       <div className="login-card">
         <span className="login-logo">
-          <img src="/armra-icon.svg" alt="ARMRA" className="armra-icon" />
+          <img src="/armra-icon.png" alt="ARMRA" className="armra-icon" />
           <span className="app-wordmark">ARMRA</span>
           <span className="app-product">Space</span>
         </span>

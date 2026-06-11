@@ -51,7 +51,7 @@ export function FilespaceDetail({
       {/* Header */}
       <div className="fs-header">
         <div className={`fs-drive ${mounted ? "on" : ""}`}>
-          <img src="/armra-icon.svg" alt="" />
+          <img src="/armra-icon.png" alt="" />
         </div>
         <div className="fs-header-text">
           <h1>{filespace.name} {mounted ? <span className="fs-connected">is connected</span> : ""}</h1>
