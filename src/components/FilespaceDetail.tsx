@@ -1,5 +1,3 @@
-import { useState, useEffect } from "react";
-import { api } from "../lib/tauri";
 import type { Filespace, ActiveFilespace, CacheConfig } from "../lib/tauri";
 
 function fmtMb(mb: number): string {
@@ -34,9 +32,6 @@ export function FilespaceDetail({
   filespace, active, mounted, mountPoint, cache, pinsCount,
   opening, busy, error, onOpen, onDisconnect, onManageCache, onRevealCache, onRefresh,
 }: Props) {
-  const [macfuse, setMacfuse] = useState<boolean | null>(null);
-  useEffect(() => { api.macfuseAvailable().then(setMacfuse).catch(() => {}); }, []);
-
   const working = busy || opening;
   const status = working ? { label: "Connecting…", cls: "warn" }
     : mounted ? { label: "Connected", cls: "ok" }
@@ -63,20 +58,6 @@ export function FilespaceDetail({
           {busy ? "Working…" : mounted ? "Open filespace ↗" : "Connect & open"}
         </button>
       </div>
-
-      {/* Mount mode — local disk (macFUSE) vs network drive (NFS). Matters for
-          creative apps that won't work off a network volume. */}
-      {macfuse === true && (
-        <div className="fs-mode local" title="macFUSE is installed — this filespace mounts as a real local disk.">
-          🖴 Mounts as a <strong>local drive</strong>
-        </div>
-      )}
-      {macfuse === false && (
-        <div className="fs-mode net">
-          <span>🌐 Mounts as a <strong>network drive</strong>. For project work, install macFUSE to mount it as a local disk.</span>
-          <button className="fs-mode-btn" onClick={() => api.openUrl("https://macfuse.github.io/")}>Install macFUSE</button>
-        </div>
-      )}
 
       {error && <div className="fs-error">{error}</div>}
 

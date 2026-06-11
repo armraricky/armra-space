@@ -211,33 +211,16 @@ pub async fn spawn_mount(
     // captured for diagnosis instead of vanishing.
     let log_file = config_path.with_extension("log").to_string_lossy().into_owned();
 
-    // macOS mount strategy:
-    //  - macFUSE installed → classic FUSE `mount` with `-o local`, which gives a
-    //    real LOCAL volume. Critical for creative apps that refuse network drives
-    //    for scratch/cache/lock files when working on project files.
-    //  - otherwise → NFS mount (built-in client, zero install friction, but the
-    //    OS classifies it as a network volume).
-    // Windows keeps classic mount (WinFSP). Same VFS flags apply to all.
+    // macOS uses rclone's NFS mount (built-in NFS client — no macFUSE / kernel
+    // extension / reboot). The macOS NFS client handles Apple metadata (Finder
+    // tags, quarantine, etc.) at a layer above rclone, so Finder folder copies
+    // don't hit the xattr EPERM that aborts a macFUSE copy with "error code
+    // -8062". Trade-off: the OS classifies it as a NETWORK volume.
+    // Windows keeps classic mount (WinFSP). Same VFS flags apply to both.
     #[cfg(target_os = "macos")]
-    let use_macfuse = is_macfuse_available();
-    #[cfg(target_os = "macos")]
-    let mount_cmd = if use_macfuse { "mount" } else { "nfsmount" };
+    let mount_cmd = "nfsmount";
     #[cfg(not(target_os = "macos"))]
     let mount_cmd = "mount";
-
-    // macFUSE volume icon: drop the bundled ARMRA icon next to the config and
-    // point macFUSE's `volicon=` option at it so the mounted drive shows the
-    // brand icon in Finder instead of the generic disk. Best-effort; macFUSE-only.
-    #[cfg(target_os = "macos")]
-    let volicon_opt: Option<String> = if use_macfuse {
-        config_path.parent().and_then(|dir| {
-            let path = dir.join("ARMRA Space.icns");
-            std::fs::write(&path, include_bytes!("../icons/icon.icns")).ok()?;
-            Some(format!("volicon={}", path.to_string_lossy()))
-        })
-    } else {
-        None
-    };
 
     let mut args: Vec<&str> = vec![
         mount_cmd,
@@ -286,7 +269,6 @@ pub async fn spawn_mount(
         // if rclone is told to exclude those, the create fails and Finder aborts
         // the entire copy with "error code -8062". We keep junk OUT another way:
         //   • .DS_Store on network (NFS) mounts → DSDontWriteNetworkStores (above)
-        //   • AppleDouble on macFUSE mounts → the `noappledouble` option (below)
         //   • anything that still lands → hidden in-app by is_junk_name() on list
         "--daemon=false",
         "--allow-non-empty",
@@ -305,22 +287,6 @@ pub async fn spawn_mount(
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = volname;
-
-    // macFUSE-only mount options: mark the volume as LOCAL (so Finder/Spotlight
-    // and apps treat it like an internal disk) and suppress AppleDouble junk.
-    #[cfg(target_os = "macos")]
-    if use_macfuse {
-        // Present as a LOCAL volume. We do NOT pass `noappledouble`: it makes
-        // macFUSE reject the .DS_Store/._ sidecars Finder writes mid folder-copy,
-        // which aborts the copy with "error code -8062". Letting them through
-        // fixes folder copies; the junk is hidden in-app by is_junk_name().
-        args.push("--option");
-        args.push("local");
-        if let Some(ref vi) = volicon_opt {
-            args.push("--option");
-            args.push(vi);
-        }
-    }
 
     let child = Command::new(rclone_bin)
         .args(&args)
