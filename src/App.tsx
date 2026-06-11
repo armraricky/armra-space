@@ -11,7 +11,7 @@ import { PinsSidebar } from "./components/PinsSidebar";
 import "./App.css";
 
 type View = "filespace" | "settings";
-type DetailTab = "overview" | "files";
+type DetailTab = "overview" | "files" | "diagnostics";
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -290,8 +290,9 @@ export default function App() {
             <div className="detail-tabs">
               <button className={`detail-tab ${tab === "overview" ? "active" : ""}`} onClick={() => setTab("overview")}>Overview</button>
               <button className={`detail-tab ${tab === "files" ? "active" : ""}`} onClick={() => setTab("files")}>Files &amp; Pins</button>
+              <button className={`detail-tab ${tab === "diagnostics" ? "active" : ""}`} onClick={() => setTab("diagnostics")}>Diagnostics</button>
             </div>
-            {tab === "overview" ? (
+            {tab !== "files" ? (
               <FilespaceDetail
                 filespace={selected}
                 active={active}
@@ -302,6 +303,7 @@ export default function App() {
                 opening={opening}
                 busy={busy}
                 error={mountError}
+                section={tab === "diagnostics" ? "diagnostics" : "overview"}
                 onOpen={openInBrowser}
                 onDisconnect={disconnect}
                 onManageCache={() => setView("settings")}

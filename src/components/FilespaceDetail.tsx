@@ -30,6 +30,7 @@ interface Props {
   opening: boolean;
   busy: boolean;
   error: string | null;
+  section?: "overview" | "diagnostics"; // which tab's content to render
   onOpen: () => void;
   onDisconnect: () => void;
   onManageCache: () => void;
@@ -39,13 +40,14 @@ interface Props {
 
 export function FilespaceDetail({
   filespace, active, mounted, mountPoint, cache, pinsCount,
-  opening, busy, error, onOpen, onDisconnect, onManageCache, onRevealCache, onRefresh,
+  opening, busy, error, section = "overview",
+  onOpen, onDisconnect, onManageCache, onRevealCache, onRefresh,
 }: Props) {
   const [macfuse, setMacfuse] = useState<boolean | null>(null);
   useEffect(() => { api.macfuseAvailable().then(setMacfuse).catch(() => {}); }, []);
 
   // Total bytes stored in this filespace (via rclone size on its mount). Slow on
-  // big buckets, so fetch once when connected + offer a manual recalculate.
+  // big buckets, so fetch once when connected (and only when its card is shown).
   const [storage, setStorage] = useState<StorageInfo | null>(null);
   const [sizing, setSizing] = useState(false);
   async function loadStorage() {
@@ -56,9 +58,9 @@ export function FilespaceDetail({
   }
   useEffect(() => {
     setStorage(null);
-    if (mounted) loadStorage();
+    if (mounted && section === "overview") loadStorage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mounted, filespace.id]);
+  }, [mounted, filespace.id, section]);
 
   const working = busy || opening;
   const status = working ? { label: "Connecting…", cls: "warn" }
@@ -69,9 +71,54 @@ export function FilespaceDetail({
   const limitMb = cache?.max_mb ?? 0;
   const usedPct = limitMb > 0 ? Math.min(100, (usedMb / limitMb) * 100) : 0;
 
+  // ── Diagnostics tab: the technical detail, kept out of the clean overview ──
+  if (section === "diagnostics") {
+    return (
+      <div className="detail-scroll">
+        <div className="fs-diag-head">
+          <h2>{filespace.name} · Diagnostics</h2>
+          <p>Connection details and troubleshooting tools. Nothing here is needed for everyday use.</p>
+        </div>
+
+        <section className="fs-card fs-card-wide">
+          <div className="fs-card-head">
+            <span className="fs-card-ic conn">↕</span><h2>Connection</h2>
+            <span className={`fs-status ${status.cls}`}>● {status.label}</span>
+          </div>
+          <div className="fs-card-grid">
+            <div><span className="fs-k">Access</span><span className="fs-v">{filespace.role}</span></div>
+            <div><span className="fs-k">Credentials</span><span className="fs-v">{isActive && active ? (MODE_LABEL[active.mode] || active.mode) : "—"}</span></div>
+            <div><span className="fs-k">Drive type</span><span className="fs-v">{macfuse === true ? "Local disk (macFUSE)" : macfuse === false ? "Network drive" : "—"}</span></div>
+            <div><span className="fs-k">Region</span><span className="fs-v">{filespace.region || "—"}</span></div>
+            <div><span className="fs-k">Mount point</span><span className="fs-v mono">{mounted && mountPoint ? mountPoint.replace(/^.*\/(?=[^/]*\/[^/]*$)/, "~/") : "—"}</span></div>
+            <div><span className="fs-k">Session</span><span className="fs-v">{isActive && active?.expiration ? "Auto-refreshing" : isActive && active?.mode === "static" ? "Long-lived" : "—"}</span></div>
+          </div>
+        </section>
+
+        <section className="fs-card fs-card-wide">
+          <div className="fs-card-head"><span className="fs-card-ic pin">⚲</span><h2>Pinned Files &amp; Cache</h2></div>
+          <div className="fs-cache-legend">
+            <span><b className="dot used" /> Pinned files <em>{pinsCount}</em></span>
+            <span><b className="dot lim" /> Cache used <em>{fmtMb(usedMb)}</em></span>
+            <span><b className="dot cap" /> Cache limit <em>{limitMb > 0 ? fmtMb(limitMb) : "Unlimited"}</em></span>
+          </div>
+          {limitMb > 0 && (
+            <div className="fs-cache-bar"><div className="fs-cache-fill" style={{ width: `${usedPct}%`, background: usedPct > 90 ? "var(--red)" : usedPct > 70 ? "var(--yellow)" : "var(--accent)" }} /></div>
+          )}
+          <div className="fs-card-links">
+            <button className="link-btn" onClick={onManageCache}>Manage cache size</button>
+            <button className="link-btn" onClick={onRevealCache}>Reveal cache folder ↗</button>
+            <button className="link-btn" onClick={() => api.revealLogs().catch(() => {})}>Reveal logs ↗</button>
+            {mounted && <button className="link-btn" onClick={onRefresh}>↻ Refresh files</button>}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  // ── Overview tab: lean essentials, sized to fit without scrolling ──
   return (
     <div className="detail-scroll">
-      {/* Header */}
       <div className="fs-header">
         <div className={`fs-drive ${mounted ? "on" : ""}`}>
           <img src="/armra-icon.png" alt="" />
@@ -103,63 +150,28 @@ export function FilespaceDetail({
 
       {error && <div className="fs-error">{error}</div>}
 
-      {/* Cards */}
-      <div className="fs-cards">
-        <section className="fs-card">
-          <div className="fs-card-head"><span className="fs-card-ic storage">▤</span><h2>Storage</h2></div>
-          <div className="fs-card-grid">
-            <div><span className="fs-k">Cloud provider</span><span className="fs-v">AWS</span></div>
-            <div><span className="fs-k">Region</span><span className="fs-v">{filespace.region || "—"}</span></div>
-            <div><span className="fs-k">Bucket</span><span className="fs-v mono">{filespace.bucket}</span></div>
-            <div><span className="fs-k">Folder (prefix)</span><span className="fs-v mono">{filespace.prefix}</span></div>
-            <div>
-              <span className="fs-k">Total stored</span>
-              <span className="fs-v" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                {!mounted ? "Connect to view"
-                  : sizing ? "Calculating…"
-                  : storage ? `${fmtBytes(storage.bytes)} · ${storage.count.toLocaleString()} files`
-                  : "—"}
-                {mounted && !sizing && (
-                  <button
-                    onClick={loadStorage}
-                    title="Recalculate"
-                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--accent)", fontSize: 13, padding: 0, lineHeight: 1 }}
-                  >↻</button>
-                )}
-              </span>
-            </div>
-          </div>
-        </section>
-
-        <section className="fs-card">
-          <div className="fs-card-head">
-            <span className="fs-card-ic conn">↕</span><h2>Connection</h2>
-            <span className={`fs-status ${status.cls}`}>● {status.label}</span>
-          </div>
-          <div className="fs-card-grid">
-            <div><span className="fs-k">Access</span><span className="fs-v">{filespace.role}</span></div>
-            <div><span className="fs-k">Credentials</span><span className="fs-v">{isActive && active ? (MODE_LABEL[active.mode] || active.mode) : "—"}</span></div>
-            <div><span className="fs-k">Mount point</span><span className="fs-v mono">{mounted && mountPoint ? mountPoint.replace(/^.*\/(?=[^/]*\/[^/]*$)/, "~/") : "—"}</span></div>
-            <div><span className="fs-k">Session</span><span className="fs-v">{isActive && active?.expiration ? "Auto-refreshing" : isActive && active?.mode === "static" ? "Long-lived" : "—"}</span></div>
-          </div>
-        </section>
-      </div>
-
-      {/* Pinned / cache */}
       <section className="fs-card fs-card-wide">
-        <div className="fs-card-head"><span className="fs-card-ic pin">⚲</span><h2>Pinned Files &amp; Cache</h2></div>
-        <div className="fs-cache-legend">
-          <span><b className="dot used" /> Pinned files <em>{pinsCount}</em></span>
-          <span><b className="dot lim" /> Cache used <em>{fmtMb(usedMb)}</em></span>
-          <span><b className="dot cap" /> Cache limit <em>{limitMb > 0 ? fmtMb(limitMb) : "Unlimited"}</em></span>
+        <div className="fs-card-head">
+          <span className="fs-card-ic storage">▤</span><h2>Storage</h2>
+          <span className={`fs-status ${status.cls}`}>● {status.label}</span>
         </div>
-        {limitMb > 0 && (
-          <div className="fs-cache-bar"><div className="fs-cache-fill" style={{ width: `${usedPct}%`, background: usedPct > 90 ? "var(--red)" : usedPct > 70 ? "var(--yellow)" : "var(--accent)" }} /></div>
-        )}
-        <div className="fs-card-links">
-          <button className="link-btn" onClick={onManageCache}>Manage cache size</button>
-          <button className="link-btn" onClick={onRevealCache}>Reveal cache folder ↗</button>
-          {mounted && <button className="link-btn" onClick={onRefresh}>↻ Refresh files</button>}
+        <div className="fs-card-grid">
+          <div><span className="fs-k">Cloud provider</span><span className="fs-v">AWS</span></div>
+          <div><span className="fs-k">Region</span><span className="fs-v">{filespace.region || "—"}</span></div>
+          <div><span className="fs-k">Bucket</span><span className="fs-v mono">{filespace.bucket}</span></div>
+          <div><span className="fs-k">Folder (prefix)</span><span className="fs-v mono">{filespace.prefix}</span></div>
+          <div>
+            <span className="fs-k">Total stored</span>
+            <span className="fs-v" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              {!mounted ? "Connect to view"
+                : sizing ? "Calculating…"
+                : storage ? `${fmtBytes(storage.bytes)} · ${storage.count.toLocaleString()} files`
+                : "—"}
+              {mounted && !sizing && (
+                <button onClick={loadStorage} title="Recalculate" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--accent)", fontSize: 13, padding: 0, lineHeight: 1 }}>↻</button>
+              )}
+            </span>
+          </div>
         </div>
       </section>
 
