@@ -21,6 +21,12 @@ jobs:
         with:
           node-version: 22
 
+      # Go is needed to build our PATCHED rclone (see scripts/fetch-rclone.sh).
+      # Pinned >= rclone's go.mod requirement (go 1.25).
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
@@ -33,9 +39,10 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      # Stage the OFFICIAL rclone build as a bundled sidecar (Homebrew's build
-      # can't `rclone mount` on macOS). Referenced by bundle.externalBin.
-      - name: Fetch rclone sidecar
+      # Build the PATCHED rclone (xattr-accepting) and stage it as a bundled
+      # sidecar. The patch makes Finder folder copies work on the macFUSE mount;
+      # see scripts/fetch-rclone.sh + scripts/rclone-xattr.patch.
+      - name: Build rclone sidecar
         run: ./scripts/fetch-rclone.sh aarch64-apple-darwin
 
       # The shipped app version AND the latest.json manifest version both come

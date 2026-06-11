@@ -1,0 +1,47 @@
+diff --git a/cmd/cmount/fs.go b/cmd/cmount/fs.go
+index 47d23df..f756979 100644
+--- a/cmd/cmount/fs.go
++++ b/cmd/cmount/fs.go
+@@ -537,27 +537,35 @@ func (fsys *FS) Fsyncdir(path string, datasync bool, fh uint64) (errc int) {
+ }
+ 
+ // Setxattr sets extended attributes.
++//
++// ARMRA patch: S3 has no place to store extended attributes, but returning
++// ENOSYS makes macFUSE surface EPERM, which causes Finder to abort folder
++// copies that carry xattrs (Finder tags, quarantine, etc.) with "error code
++// -8062". We ACCEPT and DISCARD the write (return success) so native Finder
++// copy/paste of files AND folders works on a local (macFUSE) mount. The xattrs
++// themselves are not persisted — acceptable for a cloud drive.
+ func (fsys *FS) Setxattr(path string, name string, value []byte, flags int) (errc int) {
+ 	defer log.Trace(path, "name=%q, value=%q, flags=%d", name, value, flags)("errc=%d", &errc)
+-	return -fuse.ENOSYS
++	return 0
+ }
+ 
+-// Getxattr gets extended attributes.
++// Getxattr gets extended attributes. ARMRA patch: nothing is stored, so report
++// "no such attribute" (ENOATTR) rather than ENOSYS.
+ func (fsys *FS) Getxattr(path string, name string) (errc int, value []byte) {
+ 	defer log.Trace(path, "name=%q", name)("errc=%d, value=%q", &errc, &value)
+-	return -fuse.ENOSYS, nil
++	return -fuse.ENOATTR, nil
+ }
+ 
+-// Removexattr removes extended attributes.
++// Removexattr removes extended attributes. ARMRA patch: no-op success.
+ func (fsys *FS) Removexattr(path string, name string) (errc int) {
+ 	defer log.Trace(path, "name=%q", name)("errc=%d", &errc)
+-	return -fuse.ENOSYS
++	return 0
+ }
+ 
+-// Listxattr lists extended attributes.
++// Listxattr lists extended attributes. ARMRA patch: empty list, success.
+ func (fsys *FS) Listxattr(path string, fill func(name string) bool) (errc int) {
+ 	defer log.Trace(path, "fill=%p", fill)("errc=%d", &errc)
+-	return -fuse.ENOSYS
++	return 0
+ }
+ 
+ // Getpath allows a case-insensitive file system to report the correct case of
